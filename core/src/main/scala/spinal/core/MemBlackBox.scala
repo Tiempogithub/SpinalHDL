@@ -327,3 +327,35 @@ class Ram_2wrs(
   mapClockDomain(portB_clock,io.portB.clk)
   noIoPrefix()
 }
+
+/**
+  * Rom 1rs
+  */
+class Rom_1rs(
+                  wordWidth      : Int,
+                  wordCount      : Int,
+                  binFile        : String,
+                  technology     : MemTechnologyKind = auto
+                ) extends BlackBox {
+
+  val generic = new Generic {
+    val wordCount      = Rom_1rs.this.wordCount
+    val wordWidth      = Rom_1rs.this.wordWidth
+    val binFile        = Rom_1rs.this.binFile
+    val technology     = Rom_1rs.this.technology.technologyKind
+  }
+
+  val io = new Bundle {
+    val clk  = in Bool()
+    val en   = in Bool()
+    val addr = in  UInt(log2Up(wordCount) bit)
+    val data = out Bits(wordWidth bit)
+  }
+
+  mapCurrentClockDomain(io.clk)
+  noIoPrefix()
+/*//don't do that, it creates a reset input !
+  val mem = Mem(io.data, wordCount)
+  io.data := mem.readSync(io.addr, io.en)
+ */
+}
