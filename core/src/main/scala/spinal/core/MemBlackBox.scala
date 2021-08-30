@@ -226,6 +226,7 @@ class Ram_1wors(wordWidth: Int, wordCount: Int, readUnderWrite: ReadUnderWritePo
 /**
   * Ram 1wrs
   */
+/*
 class Ram_1wrs(
   wordWidth      : Int,
   wordCount      : Int,
@@ -258,6 +259,76 @@ class Ram_1wrs(
   noIoPrefix()
 }
 
+class Ram_1wrs_miscIn(
+                wordWidth      : Int,
+                wordCount      : Int,
+                technology     : MemTechnologyKind,
+                readUnderWrite : ReadUnderWritePolicy = dontCare,
+                maskWidth      : Int,
+                maskEnable     : Boolean,
+                miscInWidth    : Int = 1
+              ) extends BlackBox {
+
+  val generic = new Generic {
+    val wordCount      = Ram_1wrs_miscIn.this.wordCount
+    val wordWidth      = Ram_1wrs_miscIn.this.wordWidth
+    val readUnderWrite = Ram_1wrs_miscIn.this.readUnderWrite.readUnderWriteString
+    val technology     = Ram_1wrs_miscIn.this.technology.technologyKind
+    val maskWidth      = Ram_1wrs_miscIn.this.maskWidth
+    val maskEnable     = Ram_1wrs_miscIn.this.maskEnable
+    val miscInWidth    = Ram_1wrs_miscIn.this.miscInWidth
+  }
+
+  val io = new Bundle {
+    val clk    =  in Bool()
+    val en     =  in Bool()
+    val wr     =  in Bool()
+    val addr   =  in UInt(log2Up(wordCount) bit)
+    val mask   =  in Bits(maskWidth bits)
+    val wrData =  in Bits(wordWidth bit)
+    val rdData = out Bits(wordWidth bit)
+    val miscIn = in(Bits(miscInWidth bits))
+  }
+
+  mapCurrentClockDomain(io.clk)
+  noIoPrefix()
+}
+*/
+
+class Ram_1wrs(
+                       wordWidth      : Int,
+                       wordCount      : Int,
+                       technology     : MemTechnologyKind,
+                       readUnderWrite : ReadUnderWritePolicy = dontCare,
+                       maskWidth      : Int,
+                       maskEnable     : Boolean,
+                       miscInWidth    : Int = 1
+                     ) extends BlackBox {
+
+  val generic = new Generic {
+    val wordCount      = Ram_1wrs.this.wordCount
+    val wordWidth      = Ram_1wrs.this.wordWidth
+    val readUnderWrite = Ram_1wrs.this.readUnderWrite.readUnderWriteString
+    val technology     = Ram_1wrs.this.technology.technologyKind
+    val maskWidth      = Ram_1wrs.this.maskWidth
+    val maskEnable     = Ram_1wrs.this.maskEnable
+    val miscInWidth    = Ram_1wrs.this.miscInWidth
+  }
+
+  val io = new Bundle {
+    val clk    =  in Bool()
+    val en     =  in Bool()
+    val wr     =  in Bool()
+    val addr   =  in UInt(log2Up(wordCount) bit)
+    val mask   =  in Bits(maskWidth bits)
+    val wrData =  in Bits(wordWidth bit)
+    val rdData = out Bits(wordWidth bit)
+    val miscIn = in(Bits(miscInWidth bits))
+  }
+
+  mapCurrentClockDomain(io.clk)
+  noIoPrefix()
+}
 
 /**
   * Ram 2wrs
