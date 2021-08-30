@@ -70,7 +70,7 @@ case class SpiSlaveCtrlIo(generics : SpiSlaveCtrlGenerics) extends Bundle{
     //TX
     val txLogic = new Area {
       val streamUnbuffered = busWithOffset.createAndDriveFlow(Bits(8 bits),address =  0).toStream
-      val (stream, fifoAvailability) = streamUnbuffered.queueWithAvailability(rxFifoDepth)
+      val (stream, fifoAvailability) = streamUnbuffered.queueWithAvailability(txFifoDepth)
       tx << stream
       busWithOffset.read(fifoAvailability, address = 4, 16)
     }
@@ -78,7 +78,7 @@ case class SpiSlaveCtrlIo(generics : SpiSlaveCtrlGenerics) extends Bundle{
     //RX
     val rxLogic = new Area {
       val listen = busWithOffset.createReadAndWrite(Bool, address = 4, bitOffset = 15) init(False)
-      val (stream, fifoOccupancy) = rx.takeWhen(listen).queueWithOccupancy(txFifoDepth)
+      val (stream, fifoOccupancy) = rx.takeWhen(listen).queueWithOccupancy(rxFifoDepth)
       busWithOffset.readStreamNonBlocking(stream, address = 0, validBitOffset = 31, payloadBitOffset = 0)
       busWithOffset.read(fifoOccupancy, address = 0, 16)
     }
@@ -136,11 +136,13 @@ case class SpiSlaveCtrl(generics : SpiSlaveCtrlGenerics) extends Component{
   io.rx.valid := RegNext(counter.willOverflow)
   io.rx.payload := buffer
 
-  io.tx.ready := counter.willOverflow || spi.ss
+  io.tx.ready := counter.willOverflow //|| spi.ss
   io.txError := io.tx.ready && !io.tx.valid
 
-  val rspBit = io.tx.payload(dataWidth - 1 - (counter >> 1))
-  val rspBitSampled = RegNextWhen(rspBit, normalizedSclkEdges.fall)
+  val txValid = RegNextWhen(io.tx.valid,counter.willOverflow) init(False)
+  val txPayload = RegNextWhen(io.tx.payload,counter.willOverflow)
+  val rspBit = txValid & txPayload(dataWidth - 1 - (counter >> 1))
+  val rspBitSampled = RegNextWhen(rspBit, normalizedSclkEdges.fall) init(False)
   spi.miso.writeEnable := !spi.ss
   spi.miso.write := io.kind.cpha ? rspBitSampled | rspBit
 }
