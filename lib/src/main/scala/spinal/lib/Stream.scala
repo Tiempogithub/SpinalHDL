@@ -1485,10 +1485,10 @@ object StreamFifoMultiChannelBench extends App{
 
 
 object StreamFifoWithRamPeek{
-  def apply[T <: Data](dataType: T, depth: Int) = new StreamFifoWithRamPeek(dataType,depth)
+  def apply[T <: Data](dataType: T, depth: Int,initArray :Array[BigInt]) = new StreamFifoWithRamPeek(dataType,depth,initArray)
 }
 
-class StreamFifoWithRamPeek[T <: Data](dataType: HardType[T], depth: Int) extends Component {
+class StreamFifoWithRamPeek[T <: Data](dataType: HardType[T], depth: Int, initArray :Array[BigInt] ) extends Component {
   require(depth > 1)
   val io = new Bundle {
     val push = slave Stream (dataType)
@@ -1502,6 +1502,13 @@ class StreamFifoWithRamPeek[T <: Data](dataType: HardType[T], depth: Int) extend
 
   val logic = (depth > 1) generate new Area {
     val ram = Vec(Reg(dataType), depth)
+    val width =dataType.getBitsWidth
+    ram.zipWithIndex.map{ case(element,index) =>
+      var init = dataType()
+      init.assignFromBits(B(initArray(index),width bits))
+      element.init(init)
+    }
+
     val pushPtr = Counter(depth)
     val popPtr = Counter(depth)
     val ptrMatch = pushPtr === popPtr
