@@ -343,7 +343,8 @@ class Rom_1rs(
                   wordWidth      : Int,
                   wordCount      : Int,
                   binFile        : String,
-                  technology     : MemTechnologyKind = auto
+                  technology     : MemTechnologyKind = auto,
+                  miscInWidth    : Int = 1
                 ) extends BlackBox {
 
   val generic = new Generic {
@@ -351,6 +352,7 @@ class Rom_1rs(
     val wordWidth      = Rom_1rs.this.wordWidth
     val binFile        = Rom_1rs.this.binFile
     val technology     = Rom_1rs.this.technology.technologyKind
+    val miscInWidth    = Rom_1rs.this.miscInWidth
   }
 
   val io = new Bundle {
@@ -358,6 +360,7 @@ class Rom_1rs(
     val en   = in Bool()
     val addr = in  UInt(log2Up(wordCount) bit)
     val data = out Bits(wordWidth bit)
+    val miscIn = in(Bits(miscInWidth bits))
   }
 
   mapCurrentClockDomain(io.clk)

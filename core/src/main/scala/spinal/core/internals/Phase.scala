@@ -767,12 +767,16 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
           wordWidth = mem.getWidth,
           wordCount = mem.wordCount,
           binFile   = binFile,
-          technology = mem.technology
+          technology = mem.technology,
+          miscInWidth = if(mem.miscInWidth > 0) mem.miscInWidth else 1
         )
 
         rom.io.addr.assignFrom(port.address)
         rom.io.en.assignFrom(wrapBool(port.readEnable) && port.clockDomain.isClockEnableActive)
-
+        if (mem.miscInWidth > 0)
+          rom.io.miscIn.assignFrom(topo.miscIn.head.data)
+        else
+          rom.io.miscIn := B"1"
         wrapConsumers(port, rom.io.data)
 
         rom.setName(mem.getName()+"bb")
