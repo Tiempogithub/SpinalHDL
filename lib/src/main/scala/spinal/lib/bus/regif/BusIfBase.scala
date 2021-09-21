@@ -139,6 +139,7 @@ trait BusIf extends BusIfBase {
     val structs = RegInsts.map(_.cStruct(regPre)).mkString("\n")
     import java.io.PrintWriter
     val fp = new PrintWriter(targetPath)
+    fp.write("#pragma once\n\n")
     fp.write(heads)
     fp.write("\n\n" + structs)
     fp.close

@@ -19,13 +19,13 @@ object CHeads {
          |    struct{
          |${reservedRenamed(reginst.getFields.toList, uint_t)}
          |    } reg;
-         |} ${(pre + reginst.name).toLowerCase()}_t""".stripMargin
+         |} ${(pre + reginst.name).toLowerCase()}_t;""".stripMargin
     }
   }
 
   implicit class RegInstCHead(reginst : RegInst) {
     def cHeadDefine(alignWidth: Int = 20, pre: String = ""): String = {
-      s"#define %-${alignWidth}s = 0x%s".format((pre + reginst.name).toUpperCase(), reginst.addr.toHexString)
+      s"#define %-${alignWidth}s 0x%s".format((pre + reginst.name).toUpperCase(), reginst.addr.toHexString)
     }
   }
 }
