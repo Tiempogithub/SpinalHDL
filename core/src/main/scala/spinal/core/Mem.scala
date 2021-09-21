@@ -90,6 +90,7 @@ object registerFile extends MemTechnologyKind {
 object Mem {
   def apply[T <: Data](wordType: HardType[T], wordCount: Int) = new Mem(wordType, wordCount)
   def apply[T <: Data](wordType: HardType[T], wordCount: Int, miscInWidth: Int, miscOutWidth: Int) = new Mem(wordType, wordCount, miscInWidth, miscOutWidth)
+  def apply[T <: Data](wordType: HardType[T], wordCount: Int, miscInWidth: Int) = new Mem(wordType, wordCount, miscInWidth, 0)
   def apply[T <: Data](wordType: HardType[T], wordCount: BigInt) = {
     assert(wordCount <= Integer.MAX_VALUE)
     new Mem(wordType, wordCount.toInt)
@@ -300,10 +301,10 @@ class Mem[T <: Data](val wordType: HardType[T], val wordCount: Int,
     readSync(address, enable, readUnderWrite, true)
   }
 
-  def miscIn(data: T) : Unit = miscInImpl(data)
+  def miscIn(data: Bits) : Unit = miscInImpl(data)
 
-  def miscInImpl(data: Data): Unit = {
-    val miscInPort = MemMiscIn(this, data.asBits,ClockDomain.current)
+  def miscInImpl(data: Bits): Unit = {
+    val miscInPort = MemMiscIn(this, data,ClockDomain.current)
     this.parentScope.append(miscInPort)
     this.dlcAppend(miscInPort)
   }
