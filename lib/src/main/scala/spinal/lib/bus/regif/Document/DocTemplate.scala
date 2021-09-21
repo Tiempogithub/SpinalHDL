@@ -130,7 +130,7 @@ object DocTemplate {
        |    </title>
        |    <style>
        |      div{
-       |          text-align: center;
+       |          text-align: left;
        |      }
        |${commonCSS}
        |${cssThemes.Default}
