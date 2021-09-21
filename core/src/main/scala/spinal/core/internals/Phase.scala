@@ -834,12 +834,18 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
             wrMaskWidth = if (wr.mask != null) wr.mask.getWidth else 1,
             wrMaskEnable = wr.mask != null,
             readUnderWrite = rd.readUnderWrite,
-            technology = mem.technology
+            technology = mem.technology,
+            miscInWidth = if(mem.miscInWidth > 0) mem.miscInWidth else 1
           )
 
           ram.io.wr.en := wrapBool(wr.writeEnable) && wr.clockDomain.isClockEnableActive
           ram.io.wr.addr.assignFrom(wr.address)
           ram.io.wr.data.assignFrom(wr.data)
+
+          if (mem.miscInWidth > 0)
+            ram.io.miscIn.assignFrom(topo.miscIn.head.data)
+          else
+            ram.io.miscIn := B"1"
 
           if (wr.mask != null)
             ram.io.wr.mask.assignFrom(wr.mask)

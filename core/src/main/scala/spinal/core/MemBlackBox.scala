@@ -94,7 +94,8 @@ class Ram_1w_1rs(
 
   rdClock        : ClockDomain,
   rdAddressWidth : Int,
-  rdDataWidth    : Int
+  rdDataWidth    : Int,
+  miscInWidth    : Int = 1
 ) extends BlackBox {
 
   val generic = new Generic {
@@ -111,6 +112,7 @@ class Ram_1w_1rs(
 
     val rdAddressWidth = Ram_1w_1rs.this.rdAddressWidth
     val rdDataWidth    = Ram_1w_1rs.this.rdDataWidth
+    val miscInWidth    = Ram_1w_1rs.this.miscInWidth
   }
 
   val io = new Bundle {
@@ -128,6 +130,8 @@ class Ram_1w_1rs(
       val addr = in  UInt(rdAddressWidth bit)
       val data = out Bits(rdDataWidth bit)
     }
+
+    val miscIn = in(Bits(miscInWidth bits))
   }
 
   mapClockDomain(wrClock,io.wr.clk)
