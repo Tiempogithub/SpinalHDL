@@ -26,7 +26,7 @@ case class Clint(hartCount : Int) extends Area{
   time := time + 1
 
   val harts = for(hartId <- 0 until hartCount) yield new Area{
-    val cmp = Reg(UInt(64 bits))
+    val cmp = Reg(UInt(64 bits)) init(BigInt("FFFFFFFFFFFFFFFF",16))
     val timerInterrupt = RegNext(time >= cmp)
     val softwareInterrupt = RegInit(False)
   }
