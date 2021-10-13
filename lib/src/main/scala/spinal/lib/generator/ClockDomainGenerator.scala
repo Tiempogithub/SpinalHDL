@@ -21,6 +21,7 @@ case class ClockDomainResetGenerator() extends Area {
   val holdDuration = Handle[Int]
   val powerOnReset = Handle.sync(false)
   val fullyAsyncReset = Handle.sync(false)
+  val asyncAssert = Handle.sync(false)
 
 
   def setInput(input : Handle[ClockDomain]) = inputClockDomain.load(input)
@@ -95,18 +96,19 @@ case class ClockDomainResetGenerator() extends Area {
           resetCounter := 0
         }
       }
-
+/*
       val inputResetPos = Bool() // our reset input, with active high level
       if(inputClockDomain.config.resetActiveLevel == HIGH)
         inputResetPos := inputClockDomain.readResetWire
       else
         inputResetPos := !inputClockDomain.readResetWire
-
+*/
+      val inputResetPos = inputClockDomain.isResetActive
       //Create all reset used later in the design
       //val outputResetReg = inputClockDomain on RegNext(outputResetUnbuffered)
       val outputResetReg = RegNext(outputResetUnbuffered)
       val outputReset = Bool()
-      if(fullyAsyncReset) {
+      if(fullyAsyncReset | asyncAssert) {
         outputReset := (inputResetPos | outputResetReg).addTag(crossClockDomain) //let async assert get through
       } else {
         outputReset := outputResetReg
