@@ -37,9 +37,45 @@ case class Axi4WriteOnly(config: Axi4Config) extends Bundle with IMasterSlave wi
     sink
   }
 
+  def setIdle(): this.type = {
+    this.writeCmd.setIdle()
+    this.writeData.setIdle()
+    this.writeRsp.setBlocked()
+    this
+  }
+
+  def setBlocked(): this.type = {
+    this.writeCmd.setBlocked()
+    this.writeData.setBlocked()
+    this.writeRsp.setIdle()
+    this
+  }
+
+  def toAxi4(): Axi4 = {
+    val ret = Axi4(config)
+    this >> ret
+  
+    ret.readCmd.setIdle()
+    ret.readRsp.setBlocked()
+
+    ret
+  }
+
   def toFullConfig(): Axi4WriteOnly = {
     val ret = Axi4WriteOnly(config.toFullConfig())
     ret << this
+    ret
+  }
+
+  def pipelined(
+    aw: StreamPipe = StreamPipe.NONE,
+    w: StreamPipe = StreamPipe.NONE,
+    b: StreamPipe = StreamPipe.NONE
+  ): Axi4WriteOnly = {
+    val ret = cloneOf(this)
+    ret.aw << this.aw.pipelined(aw)
+    ret.w << this.w.pipelined(w)
+    ret.b.pipelined(b) >> this.b
     ret
   }
 

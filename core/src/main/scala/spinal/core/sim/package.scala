@@ -49,7 +49,7 @@ package object sim {
 
   private def btToSignal(manager: SimManager, bt: BaseNode) = {
     if(bt.algoIncrementale != -1){
-      SimError(s"UNACCESSIBLE SIGNAL : $bt isn't accessible during the simulation.\n- To fix it, call simPublic() on it durring the elaboration.")
+      SimError(s"UNACCESSIBLE SIGNAL : $bt isn't accessible during the simulation.\n- To fix it, call simPublic() on it during the elaboration.")
     }
 
     manager.raw.userData.asInstanceOf[ArrayBuffer[Signal]](bt.algoInt)
@@ -71,7 +71,7 @@ package object sim {
       case Some(tag) => {
         for(i <- 0 until tag.mapping.size; mapping = tag.mapping(i)){
           if(mem.algoIncrementale != -1){
-            SimError(s"UNACCESSIBLE SIGNAL : $mem isn't accessible during the simulation.\n- To fix it, call simPublic() on it durring the elaboration.")
+            SimError(s"UNACCESSIBLE SIGNAL : $mem isn't accessible during the simulation.\n- To fix it, call simPublic() on it during the elaboration.")
           }
           val symbol = manager.raw.userData.asInstanceOf[ArrayBuffer[Signal]](mem.algoInt + i)
           val symbolData = (data >> mapping.range.low) & mapping.mask
@@ -97,7 +97,7 @@ package object sim {
         var data = BigInt(0)
         for(i <- 0 until tag.mapping.size; mapping = tag.mapping(i)){
           if(mem.algoIncrementale != -1){
-            SimError(s"UNACCESSIBLE SIGNAL : $mem isn't accessible during the simulation.\n- To fix it, call simPublic() on it durring the elaboration.")
+            SimError(s"UNACCESSIBLE SIGNAL : $mem isn't accessible during the simulation.\n- To fix it, call simPublic() on it during the elaboration.")
           }
           val symbol = manager.raw.userData.asInstanceOf[ArrayBuffer[Signal]](mem.algoInt + i)
           val readed = manager.getBigInt(symbol, address)
@@ -778,7 +778,7 @@ package object sim {
   case class SimMutex(){
     val queue = mutable.Queue[SimThread]()
     var locked = false
-    def lock(){
+    def lock() : Unit = {
       if(locked) {
         val t = simThread
         queue.enqueue(t)
@@ -787,7 +787,7 @@ package object sim {
         locked = true
       }
     }
-    def unlock(){
+    def unlock() : Unit = {
       assert(locked)
       if(queue.nonEmpty) {
         queue.dequeue().resume()

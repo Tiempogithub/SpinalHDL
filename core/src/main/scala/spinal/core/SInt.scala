@@ -97,6 +97,11 @@ class SInt extends BitVector with Num[SInt] with MinMaxProvider with DataPrimiti
   override def ^(right: SInt): SInt = wrapBinaryOperator(right, new Operator.SInt.Xor)
   override def unary_~ : SInt      = wrapUnaryOperator(new Operator.SInt.Not)
 
+  def valueRange: Range = {
+    assert(getWidth < 33)
+    (-(1l << getWidth-1) toInt) to (1 << getWidth-1)-1
+  }
+
   /* Implement fixPoint operators */
   def sign: Bool = this.msb
   /**
@@ -493,7 +498,7 @@ class SInt extends BitVector with Num[SInt] with MinMaxProvider with DataPrimiti
     node
   })
 
-  override def resize(width: BitCount) = resize(width.value)
+  override def resize(width: BitCount) : SInt = resize(width.value)
 
   override def minValue: BigInt = -(BigInt(1) << (getWidth - 1))
   override def maxValue: BigInt =  (BigInt(1) << (getWidth - 1)) - 1
@@ -521,4 +526,6 @@ class SInt extends BitVector with Num[SInt] with MinMaxProvider with DataPrimiti
   override private[core] def formalPast(delay: Int) = this.wrapUnaryOperator(new Operator.Formal.PastSInt(delay))
 
   def reversed = S(B(this.asBools.reverse))
+
+  override def assignFormalRandom(kind: Operator.Formal.RandomExpKind) = this.assignFrom(new Operator.Formal.RandomExpSInt(kind, widthOf(this)))
 }

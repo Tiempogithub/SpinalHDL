@@ -28,8 +28,8 @@ class Axi4Ax(val config: Axi4Config,val userWidth : Int) extends Bundle {
   def setBurstWRAP() : Unit = {assert(config.useBurst); burst := WRAP}
   def setBurstINCR() : Unit = {assert(config.useBurst); burst := INCR}
 
-  def isINCR() = burst === INCR
-  def isFIXED() = burst === FIXED
+  def isINCR() = if(config.useBurst) burst === INCR else True
+  def isFIXED() = if(config.useBurst) burst === FIXED else False
 
   def setSize(sizeBurst :UInt) : Unit = if(config.useBurst) size := sizeBurst
   def setLock(lockType :Bits) : Unit = if(config.useLock) lock := lockType
@@ -57,9 +57,9 @@ class Axi4Arw(config: Axi4Config) extends Axi4Ax(config, config.arwUserWidth){
  */
 case class Axi4W(config: Axi4Config) extends Bundle {
   val data = Bits(config.dataWidth bits)
-  val strb = if(config.useStrb) Bits(config.bytePerWord bits) else null
-  val user = if(config.useWUser) Bits(config.wUserWidth bits)     else null
-  val last = if(config.useLast)  Bool()                            else null
+  val strb = if(config.useStrb)  Bits(config.bytePerWord bits) else null
+  val user = if(config.useWUser) Bits(config.wUserWidth bits)  else null
+  val last = if(config.useLast)  Bool()                        else null
 
   def setStrb() : Unit = if(config.useStrb) strb := (1 << widthOf(strb))-1
   def setStrb(bytesLane : Bits) : Unit = if(config.useStrb) strb := bytesLane
@@ -71,8 +71,8 @@ case class Axi4W(config: Axi4Config) extends Bundle {
  * @param config Axi4 configuration class
  */
 case class Axi4B(config: Axi4Config) extends Bundle {
-  val id   = if(config.useId)   UInt(config.idWidth bits)   else null
-  val resp = if(config.useResp) Bits(2 bits)                else null
+  val id   = if(config.useId)    UInt(config.idWidth bits)    else null
+  val resp = if(config.useResp)  Bits(2 bits)                 else null
   val user = if(config.useBUser) Bits(config.bUserWidth bits) else null
 
   import Axi4.resp._
@@ -94,8 +94,8 @@ case class Axi4B(config: Axi4Config) extends Bundle {
  */
 case class Axi4R(config: Axi4Config) extends Bundle {
   val data = Bits(config.dataWidth bits)
-  val id   = if(config.useId)   UInt(config.idWidth bits)   else null
-  val resp = if(config.useResp) Bits(2 bits)               else null
+  val id   = if(config.useId)    UInt(config.idWidth bits)    else null
+  val resp = if(config.useResp)  Bits(2 bits)                 else null
   val last = if(config.useLast)  Bool()                       else null
   val user = if(config.useRUser) Bits(config.rUserWidth bits) else null
 
@@ -118,15 +118,15 @@ case class Axi4R(config: Axi4Config) extends Bundle {
 
 class Axi4AxUnburstified(val config : Axi4Config, userWidth : Int) extends Bundle {
   val addr   = UInt(config.addressWidth bits)
-  val id     = if(config.useId)     UInt(config.idWidth bits)   else null
-  val region = if(config.useRegion) Bits(4 bits)                else null
-  val size   = if(config.useSize)   UInt(3 bits)                else null
-  val burst  = if(config.useBurst)  Bits(2 bits)                else null
-  val lock   = if(config.useLock)   Bits(1 bits)                else null
-  val cache  = if(config.useCache)  Bits(4 bits)                else null
-  val qos    = if(config.useQos)    Bits(4 bits)                else null
-  val user   = if(userWidth >= 0)   Bits(userWidth bits)        else null
-  val prot   = if(config.useProt)   Bits(3 bits)                else null
+  val id     = if(config.useId)     UInt(config.idWidth bits) else null
+  val region = if(config.useRegion) Bits(4 bits)              else null
+  val size   = if(config.useSize)   UInt(3 bits)              else null
+  val burst  = if(config.useBurst)  Bits(2 bits)              else null
+  val lock   = if(config.useLock)   Bits(1 bits)              else null
+  val cache  = if(config.useCache)  Bits(4 bits)              else null
+  val qos    = if(config.useQos)    Bits(4 bits)              else null
+  val user   = if(userWidth >= 0)   Bits(userWidth bits)      else null
+  val prot   = if(config.useProt)   Bits(3 bits)              else null
 }
 
 object Axi4AxUnburstified{
@@ -140,7 +140,7 @@ object Axi4AxUnburstified{
       override def clone: State.this.type = new State().asInstanceOf[this.type]
     }
     val area = new Area {
-      val result = Stream Fragment (cloneOf(outPayloadType))
+      val result = Stream Fragment (outPayloadType)
       val doResult = Bool()
       val addrIncrRange = (Math.min(11, stream.payload.config.addressWidth - 1) downto 0)
 
@@ -152,9 +152,9 @@ object Axi4AxUnburstified{
         val last        = beat === 1
         val address     = Axi4.incr(
           address = transaction.addr,
-          burst   = transaction.burst,
+          burst   = if(stream.config.useBurst) transaction.burst else Axi4.burst.INCR,
           len     = len,
-          size    = transaction.size,
+          size    = if(stream.config.useSize) transaction.size else U(log2Up(stream.config.bytePerWord)),
           bytePerWord = stream.config.bytePerWord
         )
 
@@ -178,15 +178,16 @@ object Axi4AxUnburstified{
         stream.ready    := result.ready
         result.valid    := stream.valid
         result.fragment.assignSomeByName(stream.payload)
-        when(stream.len === 0) {
-          result.last := True
-        }otherwise{
-          result.last := False
-          when(result.ready){
-            buffer.valid := stream.valid
-            buffer.transaction.assignSomeByName(stream.payload)
-            buffer.beat := stream.len
-            buffer.len := stream.len
+        result.last := True
+        if(stream.config.useLen) {
+          when(stream.len =/= 0) {
+            result.last := False
+            when(result.ready){
+              buffer.valid := stream.valid
+              buffer.transaction.assignSomeByName(stream.payload)
+              buffer.beat := stream.len
+              buffer.len := stream.len
+            }
           }
         }
       }
@@ -230,8 +231,8 @@ object Axi4Priv{
 
   def driveAx[T <: Axi4Ax](stream: Stream[T],sink: Stream[T]): Unit = {
     sink.arbitrationFrom(stream)
-    assert(stream.config.idWidth <= sink.config.idWidth, s"$stream idWidth > $sink idWidth")
-    assert(stream.config.addressWidth >= sink.config.addressWidth, s"$stream  addressWidth < $sink addressWidth")
+    assert(stream.config.idWidth <= sink.config.idWidth, s"Expect $stream idWidth=${stream.config.idWidth} <= $sink idWidth=${sink.config.idWidth}")
+    assert(stream.config.addressWidth >= sink.config.addressWidth, s"Expect $stream addressWidth=${stream.config.addressWidth} >= $sink addressWidth=${sink.config.addressWidth}")
 
     sink.addr := stream.addr.resized
     driveWeak(stream,sink,stream.id,sink.id,() => U(sink.id.range -> false),true,false)
@@ -307,7 +308,7 @@ object Axi4W{
 object Axi4B{
   implicit class StreamPimper(stream : Stream[Axi4B]) {
     def drive(sink: Stream[Axi4B]): Unit = {
-      assert(stream.config.idWidth >= sink.config.idWidth, s"$stream idWidth < $sink idWidth")
+      assert(stream.config.idWidth >= sink.config.idWidth, s"Expect $stream idWidth=${stream.config.idWidth} >= $sink idWidth=${sink.config.idWidth}")
       sink.arbitrationFrom(stream)
 
       Axi4Priv.driveWeak(stream,sink,stream.id,sink.id,null,true,true)
@@ -320,7 +321,7 @@ object Axi4B{
 object Axi4R{
   implicit class StreamPimper(stream : Stream[Axi4R]) {
     def drive(sink: Stream[Axi4R]): Unit = {
-      assert(stream.config.idWidth >= sink.config.idWidth, s"$stream idWidth < $sink idWidth")
+      assert(stream.config.idWidth >= sink.config.idWidth, s"Expect $stream idWidth=${stream.config.idWidth} >= $sink idWidth=${sink.config.idWidth}")
 
       sink.arbitrationFrom(stream)
       sink.data := stream.data

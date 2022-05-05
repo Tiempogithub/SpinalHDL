@@ -167,8 +167,8 @@ class PhaseContext(val config: SpinalConfig) {
   }
 
   def checkGlobalData(): Unit = {
-    if (DslScopeStack.nonEmpty) SpinalError("dslScope stack is not empty :(")
-    if (ClockDomainStack.nonEmpty) SpinalError("dslClockDomain stack is not empty :(")
+    if (DslScopeStack.get != null) SpinalError("dslScope stack is not empty :(")
+    if (ClockDomainStack.get != null) SpinalError("dslClockDomain stack is not empty :(")
   }
 
   def checkPendingErrors(msg : String) = if(globalData.pendingErrors.nonEmpty)
@@ -276,9 +276,9 @@ class PhaseApplyIoDefault(pc: PhaseContext) extends PhaseNetlist{
 
           if (c != null) {
             val scope = node.rootScopeStatement
-            scope.push()
+            val ctx = scope.push()
             node.assignFrom(defaultValue.that)
-            scope.pop()
+            ctx.restore()
           }
         case _ =>
       }
@@ -384,9 +384,9 @@ class PhaseAnalog extends PhaseNetlist{
 
         bt.removeAssignments()
         bt.setAsComb()
-        bt.rootScopeStatement.push()
+        val ctx = bt.rootScopeStatement.push()
         bt := target
-        bt.rootScopeStatement.pop()
+        ctx.restore()
       }
 
       //Convert target comb assignment into AnalogDriver nods
@@ -394,9 +394,9 @@ class PhaseAnalog extends PhaseNetlist{
         s.source match {
           case btSource: BaseType if btSource.isAnalog =>
           case btSource =>
-            s.parentScope.push()
+            val ctx = s.parentScope.push()
             val enable = ConditionalContext.isTrue(target.rootScopeStatement)
-            s.parentScope.pop()
+            ctx.restore()
             s.removeStatementFromScope()
             target.rootScopeStatement.append(s)
             val driver = btSource.getTypeObject match {
@@ -555,7 +555,7 @@ class PhaseAnalog extends PhaseNetlist{
 //}
 
 
-class MemTopology(val mem: Mem[_], val consumers : mutable.HashMap[Expression, ArrayBuffer[ExpressionContainer]]) {
+class MemTopology(val mem: Mem[_], val consumers : mutable.HashMap[Expression, ArrayBuffer[ExpressionContainer]] = mutable.HashMap[Expression, ArrayBuffer[ExpressionContainer]]()) {
   val writes                   = ArrayBuffer[MemWrite]()
   val readsAsync               = ArrayBuffer[MemReadAsync]()
   val readsSync                = ArrayBuffer[MemReadSync]()
@@ -609,7 +609,7 @@ trait PhaseMemBlackboxing extends PhaseNetlist {
         }
 
         mem.component.rework{
-          val content = Bits(mem.width bits)
+          val content = Bits(mem.width bits).allowOverride
           mem.foreachStatements{
             case port : MemWrite => {
               assert(port.aspectRatio == 1)
@@ -696,6 +696,25 @@ trait PhaseMemBlackboxing extends PhaseNetlist {
   }
 
   def doBlackboxing(pc: PhaseContext, typo: MemTopology): Unit
+
+  def wrapConsumers(topo : MemTopology, oldSource: Expression, newSource: Expression): Unit ={
+    topo.consumers.get(oldSource) match {
+      case None        =>
+      case Some(array) => array.foreach(ec => {
+        ec.remapExpressions{
+          case e if e == oldSource => newSource
+          case e                   => e
+        }
+      })
+    }
+  }
+
+  def removeMem(mem : Mem[_]): Unit ={
+    mem.removeStatement()
+    mem.foreachStatements(s => s.removeStatement())
+  }
+
+
 }
 
 
@@ -726,20 +745,11 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
     }
 
     def wrapConsumers(oldSource: Expression, newSource: Expression): Unit ={
-      topo.consumers.get(oldSource) match {
-        case None        =>
-        case Some(array) => array.foreach(ec => {
-          ec.remapExpressions{
-            case e if e == oldSource => newSource
-            case e                   => e
-          }
-        })
-      }
+      super.wrapConsumers(topo, oldSource, newSource)
     }
 
     def removeMem(): Unit ={
-      mem.removeStatement()
-      mem.foreachStatements(s => s.removeStatement())
+      super.removeMem(mem)
     }
 
     if (mem.initialContent != null) {
@@ -750,7 +760,7 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
         val wr = topo.writes(0)
         for (rd <- topo.readsAsync) {
           val clockDomain = wr.clockDomain
-          clockDomain.push()
+          val ctx = ClockDomainStack.set(clockDomain)
 
           val ram = new Ram_1w_1ra(
             wordWidth = mem.getWidth,
@@ -778,7 +788,7 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
           wrapConsumers(rd, ram.io.rd.data)
 
           ram.setName(mem.getName())
-          clockDomain.pop()
+          ctx.restore()
         }
 
         for (rd <- topo.readsSync) {
@@ -821,10 +831,11 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
         val port = topo.readWriteSync.head
 
         val ram = new Ram_1wrs(
-          wordWidth = mem.getWidth,
-          wordCount = mem.wordCount,
+          wordWidth = port.width,
+          wordCount = mem.wordCount*mem.width/port.width,
           technology = mem.technology,
           readUnderWrite = port.readUnderWrite,
+          duringWrite = port.duringWrite,
           maskWidth = if (port.mask != null) port.mask.getWidth else 1,
           maskEnable = port.mask != null
         )
@@ -855,12 +866,14 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
           wordCount = mem.wordCount,
           technology = mem.technology,
           portA_readUnderWrite = portA.readUnderWrite,
+          portA_duringWrite = portA.duringWrite,
           portA_clock = portA.clockDomain,
           portA_addressWidth = portA.address.getWidth,
           portA_dataWidth = portA.getWidth,
           portA_maskWidth = if (portA.mask != null) portA.mask.getWidth else 1,
           portA_maskEnable = portA.mask != null,
           portB_readUnderWrite = portB.readUnderWrite,
+          portB_duringWrite = portB.duringWrite,
           portB_clock = portB.clockDomain,
           portB_addressWidth = portB.address.getWidth,
           portB_dataWidth = portB.getWidth,
@@ -911,13 +924,15 @@ class PhaseNameNodesByReflection(pc: PhaseContext) extends PhaseMisc{
     }
     for (c <- sortedComponents) {
       if(c != topLevel) {
-        if (c.definitionName == null) {
-          val pre = c match {
+        val pre = c match {
             case t: BlackBox => ""
             case _ => config.globalPrefix
           }
+        if (c.definitionName == null) {
           val privateNsN = (if(config.privateNamespace) topLevel.definitionName + "_" else "")
           c.definitionName = pre + privateNsN + classNameOf(c)
+        } else {
+          c.definitionName = pre + c.definitionName
         }
       }
       if (c.definitionName == "") {
@@ -955,7 +970,7 @@ class PhaseCollectAndNameEnum(pc: PhaseContext) extends PhaseMisc{
   override def impl(pc : PhaseContext): Unit = {
     import pc._
     walkDeclarations {
-      case enum: SpinalEnumCraft[_] => enums.getOrElseUpdate(enum.spinalEnum, null) //Encodings will be added later
+      case senum: SpinalEnumCraft[_] => enums.getOrElseUpdate(senum.spinalEnum, null) //Encodings will be added later
       case _ =>
     }
 
@@ -990,32 +1005,39 @@ class PhaseCollectAndNameEnum(pc: PhaseContext) extends PhaseMisc{
 }
 
 
-class PhasePullClockDomains(pc: PhaseContext) extends PhaseNetlist{
+object PhasePullClockDomains{
+  def single(c : Component): Unit ={
+    val cds = mutable.LinkedHashSet[ClockDomain]()
+    c.dslBody.walkLeafStatements{
+      case bt : BaseType if bt.isReg =>
+        val cd = bt.clockDomain
+        if(bt.isUsingResetSignal && (!cd.hasResetSignal && !cd.hasSoftResetSignal))
+          SpinalError(s"MISSING RESET SIGNAL in the ClockDomain used by $bt\n${bt.getScalaLocationLong}")
 
+        cds += cd
+      case ls => ls.foreachClockDomain(cd => cds += cd)
+    }
+
+    c.rework{
+      for(cd <- cds){
+        cd.readClockWire
+        if(cd.hasResetSignal)       cd.readResetWire
+        if(cd.hasSoftResetSignal)   cd.readSoftResetWire
+        if(cd.hasClockEnableSignal) cd.readClockEnableWire
+      }
+    }
+  }
+
+  def recursive(c : Component) : Unit = {
+    single(c)
+    c.children.foreach(recursive)
+  }
+}
+
+class PhasePullClockDomains(pc: PhaseContext) extends PhaseNetlist{
   override def impl(pc : PhaseContext): Unit = {
     import pc._
-
-    walkComponents(c => {
-      val cds = mutable.LinkedHashSet[ClockDomain]()
-      c.dslBody.walkLeafStatements{
-        case bt : BaseType if bt.isReg =>
-          val cd = bt.clockDomain
-          if(bt.isUsingResetSignal && (!cd.hasResetSignal && !cd.hasSoftResetSignal))
-            SpinalError(s"MISSING RESET SIGNAL in the ClockDomain used by $bt\n${bt.getScalaLocationLong}")
-
-          cds += cd
-        case ls => ls.foreachClockDomain(cd => cds += cd)
-      }
-
-      c.rework{
-        for(cd <- cds){
-          cd.readClockWire
-          if(cd.hasResetSignal)       cd.readResetWire
-          if(cd.hasSoftResetSignal)   cd.readSoftResetWire
-          if(cd.hasClockEnableSignal) cd.readClockEnableWire
-        }
-      }
-    })
+    walkComponents(c => PhasePullClockDomains.single(c))
   }
 }
 
@@ -1077,14 +1099,14 @@ class PhaseInferEnumEncodings(pc: PhaseContext, encodingSwap: (SpinalEnumEncodin
       node.bootInferration()
     })
 
-    nodes.foreach(enum => {
-      enum.swapEncoding(encodingSwap(enum.getEncoding))
+    nodes.foreach(senum => {
+      senum.swapEncoding(encodingSwap(senum.getEncoding))
     })
 
     algo = globalData.allocateAlgoIncrementale()
 
-    nodes.foreach(enum => {
-      if(enum.propagateEncoding){
+    nodes.foreach(senum => {
+      if(senum.propagateEncoding){
 
         def propagateOn(that : Expression): Unit = {
           that match {
@@ -1093,7 +1115,7 @@ class PhaseInferEnumEncodings(pc: PhaseContext, encodingSwap: (SpinalEnumEncodin
 
               that.algoIncrementale = algo
 
-              if(that.encodingProposal(enum.getEncoding)) {
+              if(that.encodingProposal(senum.getEncoding)) {
                 that match {
                   case that: SpinalEnumCraft[_] =>
                     that.dlcForeach(s => propagateOn(s.source))
@@ -1107,39 +1129,39 @@ class PhaseInferEnumEncodings(pc: PhaseContext, encodingSwap: (SpinalEnumEncodin
           }
         }
 
-        enum match {
-          case enum : SpinalEnumCraft[_] =>
-            enum.dlcForeach(s => propagateOn(s.source))
-            consumers.getOrElse(enum, Nil).foreach(propagateOn(_))
+        senum match {
+          case senum : SpinalEnumCraft[_] =>
+            senum.dlcForeach(s => propagateOn(s.source))
+            consumers.getOrElse(senum, Nil).foreach(propagateOn(_))
           case _ =>
-            enum.foreachExpression(propagateOn(_))
-            consumers.getOrElse(enum, Nil).foreach(propagateOn(_))
+            senum.foreachExpression(propagateOn(_))
+            consumers.getOrElse(senum, Nil).foreach(propagateOn(_))
         }
       }
     })
 
     //Feed enums with encodings
     enums.keys.toArray.distinct.foreach(enums(_) = mutable.LinkedHashSet[SpinalEnumEncoding]())
-    nodes.foreach(enum => {
-      enums(enum.getDefinition) += enum.getEncoding
+    nodes.foreach(senum => {
+      enums(senum.getDefinition) += senum.getEncoding
     })
 
     //give a name to unnamed encodingss
     val unnamedEncodings = enums.valuesIterator.flatten.toSeq.distinct.withFilter(_.isUnnamed).foreach(_.setName("anonymousEnc", Nameable.DATAMODEL_WEAK))
 
     //Check that there is no encoding overlaping
-    for((enum,encodings) <- enums){
+    for((senum,encodings) <- enums){
       for(encoding <- encodings) {
         val reserveds = mutable.Map[BigInt, ArrayBuffer[SpinalEnumElement[_]]]()
 
-        for(element <- enum.elements){
+        for(element <- senum.elements){
           val key = encoding.getValue(element)
           reserveds.getOrElseUpdate(key,ArrayBuffer[SpinalEnumElement[_]]()) += element
         }
 
         for((key,elements) <- reserveds){
           if(elements.length != 1){
-            PendingError(s"Conflict in the $enum enumeration with the '$encoding' encoding with the key $key' and following elements:.\n${elements.mkString(", ")}\n\nEnumeration defined at :\n${enum.getScalaLocationLong}Encoding defined at :\n${encoding.getScalaLocationLong}")
+            PendingError(s"Conflict in the $senum enumeration with the '$encoding' encoding with the key $key' and following elements:.\n${elements.mkString(", ")}\n\nEnumeration defined at :\n${senum.getScalaLocationLong}Encoding defined at :\n${encoding.getScalaLocationLong}")
           }
         }
       }
@@ -1249,9 +1271,11 @@ class PhaseInferWidth(pc: PhaseContext) extends PhaseMisc{
             }
           case _ =>
         }
-
         walkDeclarations {
-          case e: Widthable => widthableCheck(e)
+          case e: Widthable => {
+            if(e.getWidth == 0 && e.isNamed) globalData.zeroWidths += (e.component -> e)
+            widthableCheck(e)
+          }
           case _ =>
         }
 
@@ -1559,6 +1583,43 @@ class PhaseCheckCrossClock() extends PhaseCheck{
   }
 }
 
+class PhaseNextifyTag(val dest : BaseType) extends SpinalTag
+class PhaseNextifyReg() extends PhaseNetlist{
+  override def impl(pc: PhaseContext) = {
+    pc.walkDeclarations{
+      case bt : BaseType if bt.hasTag(classOf[PhaseNextifyTag])=> {
+        bt.isReg match {
+          case false => ???
+          case true => {
+            val dests = bt.getTags().collect{ case e : PhaseNextifyTag  => e.dest }
+            val seed = dests.head //Used to implement the ff input logic
+
+            dests.foreach(_.unfreeze())
+
+            for(other <- dests.filter(_ != seed)) {
+              other.component.rework{other := seed.pull()} //pull to ensure it work with in/out
+            }
+
+            bt.parentScope.onHead(seed := bt) //Default value
+
+            bt.foreachStatements{
+              case s : InitAssignmentStatement =>
+              case s : DataAssignmentStatement => {
+                //Move the assignment to the seed
+                s.dlcRemove()
+                s.target = seed
+                seed.dlcAppend(s)
+              }
+            }
+
+            bt.component.rework(bt := seed)
+          }
+        }
+      }
+      case _ =>
+    }
+  }
+}
 
 class PhaseRemoveUselessStuff(postClockPulling: Boolean, tagVitals: Boolean) extends PhaseNetlist {
 
@@ -1593,9 +1654,15 @@ class PhaseRemoveUselessStuff(postClockPulling: Boolean, tagVitals: Boolean) ext
         } else {
           s.foreachClockDomain(cd => {
             propagate(cd.clock)
-            if(cd.hasResetSignal) propagate(cd.reset)
-            if(cd.hasSoftResetSignal) propagate(cd.softReset)
-            if(cd.hasClockEnableSignal) propagate(cd.clockEnable)
+            def propCached(that : BaseType): Unit ={
+              s.component.pulledDataCache.get(that) match {
+                case Some(x) => propagate(x.asInstanceOf[BaseType])
+                case None =>    propagate(that)
+              }
+            }
+            if(cd.hasResetSignal) propCached(cd.reset)
+            if(cd.hasSoftResetSignal) propCached(cd.softReset)
+            if(cd.hasClockEnableSignal) propCached(cd.clockEnable)
           })
         }
 
@@ -1621,14 +1688,18 @@ class PhaseRemoveUselessStuff(postClockPulling: Boolean, tagVitals: Boolean) ext
             case p: MemReadAsync =>
           }
           case s: MemWrite =>
+            s.isVital |= vital
             s.walkExpression{ case e: Statement => propagate(e) case _ => }
           case s: MemReadWrite =>
+            s.isVital |= vital
             propagate(s.mem)
             s.walkExpression{ case e: Statement => propagate(e) case _ => }
           case s: MemReadSync =>
+            s.isVital |= vital
             propagate(s.mem)
             s.walkExpression{ case e: Statement => propagate(e) case _ => }
           case s: MemReadAsync =>
+            s.isVital |= vital
             propagate(s.mem)
             s.walkExpression{ case e: Statement => propagate(e) case _ => }
         }
@@ -1639,12 +1710,13 @@ class PhaseRemoveUselessStuff(postClockPulling: Boolean, tagVitals: Boolean) ext
     topLevel.getAllIo.withFilter(bt => !bt.isDirectionLess).foreach(propagate(_, tagVitals))
     walkComponents{
       case c: BlackBox if c.isBlackBox => c.getAllIo.withFilter(_.isInputOrInOut).foreach(propagate(_, tagVitals))
+      case c if c.withVitalOutputs => c.getAllIo.withFilter(bt => bt.isOutputOrInOut).foreach(propagate(_, tagVitals))
       case c =>
     }
 
     val keepNamed = !pc.config.removePruned
     walkStatements{
-      case s: BaseType => if(keepNamed && s.isNamed && (s.namePriority >= Nameable.USER_WEAK || s.isVital)) propagate(s, false)
+      case s: BaseType => if((keepNamed || s.dontSimplify) && s.isNamed && (s.namePriority >= Nameable.USER_WEAK || s.isVital)) propagate(s, false)
       case s: DeclarationStatement => if(keepNamed && s.isNamed) propagate(s, false)
       case s: AssertStatement      => if(s.kind == AssertStatementKind.ASSERT || pc.config.isSystemVerilog) propagate(s, false)
       case s: TreeStatement        =>
@@ -1724,7 +1796,7 @@ class PhaseCompletSwitchCases extends PhaseNetlist{
     import pc._
 
     walkStatements{
-      case s: SwitchStatement if s.isFullyCoveredWithoutDefault =>
+      case s: SwitchStatement if s.isFullyCoveredWithoutDefault && !s.coverUnreachable =>
         if(s.defaultScope != null && !s.defaultScope.isEmpty){
           PendingError(s"UNREACHABLE DEFAULT STATEMENT on \n" + s.getScalaLocationLong)
         }
@@ -1756,7 +1828,6 @@ class PhaseCheckIoBundle extends PhaseCheck{
   }
 }
 
-
 class PhaseCheckHiearchy extends PhaseCheck{
 
   override def impl(pc: PhaseContext): Unit = {
@@ -1764,6 +1835,7 @@ class PhaseCheckHiearchy extends PhaseCheck{
 
     //Check hierarchy read/write violation
     walkComponents(c => {
+      val autoPullOn = mutable.LinkedHashSet[Expression]()
       c.dslBody.walkStatements(s => {
         var error = false
 
@@ -1789,21 +1861,47 @@ class PhaseCheckHiearchy extends PhaseCheck{
                 PendingError(s"SCOPE VIOLATION : $bt is assigned outside its declaration scope at \n${s.getScalaLocationLong}")
               }
             }
+          case s : MemPortStatement => {
+            if(s.mem.component != s.component){
+              PendingError(s"SCOPE VIOLATION : memory port $s was created in another component than its memory ${s.mem} \n${s.getScalaLocationLong}")
+            }
+          }
           case _ =>
         }
 
-        if(!error) s.walkExpression {
+        if(!error) s.walkDrivingExpressions {
           case bt: BaseType =>
             if (!(bt.component == c) && !(bt.isInputOrInOut && bt.component.parent == c) && !(bt.isOutputOrInOut && bt.component.parent == c)) {
               if(bt.component == null || bt.getComponents().head != pc.topLevel){
                 PendingError(s"OLD NETLIST RE-USED : $bt is used to drive the $s statement, but was defined in another netlist.\nBe sure you didn't defined a hardware constant as a 'val' in a global scala object.\n${s.getScalaLocationLong}")
               } else {
-                PendingError(s"HIERARCHY VIOLATION : $bt is used to drive the $s statement, but isn't readable in the $c component\n${s.getScalaLocationLong}")
+                if(c.withHierarchyAutoPull){
+                  autoPullOn += bt
+                } else {
+                  PendingError(s"HIERARCHY VIOLATION : $bt is used to drive the $s statement, but isn't readable in the $c component\n${s.getScalaLocationLong}")
+                }
               }
             }
+          case s : MemPortStatement =>{
+            if(s.mem.component != c){
+              PendingError(s"OLD NETLIST RE-USED : Memory port $s of memory ${s.mem} is used to drive the $s statement, but was defined in another netlist.\nBe sure you didn't defined a hardware constant as a 'val' in a global scala object.\n${s.getScalaLocationLong}")
+            }
+          }
           case _ =>
         }
       })
+
+      if(autoPullOn.nonEmpty) c.rework{
+        c.dslBody.walkStatements(s =>
+          s.walkRemapDrivingExpressions(e =>
+            if(autoPullOn.contains(e)){
+              e.asInstanceOf[BaseType].pull()
+            } else {
+              e
+            }
+          )
+        )
+      }
 
       //Check register defined as component inputs
       c.getAllIo.foreach(bt => if(bt.isInput && bt.isReg){
@@ -1812,6 +1910,7 @@ class PhaseCheckHiearchy extends PhaseCheck{
     })
   }
 }
+
 
 
 class PhaseCheck_noRegisterAsLatch() extends PhaseCheck{
@@ -1844,7 +1943,12 @@ class PhaseCheck_noRegisterAsLatch() extends PhaseCheck{
             if(withInit){
               regToComb += bt
               if(bt.isVital && !bt.hasTag(unsetRegIfNoAssignementTag)){
-                SpinalWarning(s"UNASSIGNED REGISTER $bt with init value, please apply the allowUnsetRegToAvoidLatch tag if that's fine")
+                if(bt.scalaTrace == null){
+                  PendingError(s"UNASSIGNED REGISTER $bt with init value, please apply the allowUnsetRegToAvoidLatch tag if that's fine\n${bt.getScalaLocationLong}")
+                } else {
+                  SpinalWarning(s"UNASSIGNED REGISTER $bt with init value, please apply the allowUnsetRegToAvoidLatch tag if that's fine\n${bt.getScalaLocationLong}")
+                }
+
               }
             }else if(bt.isVital) {
               PendingError(s"UNASSIGNED REGISTER $bt, defined at\n${bt.getScalaLocationLong}")
@@ -1875,7 +1979,6 @@ class PhaseCheck_noRegisterAsLatch() extends PhaseCheck{
     }
   }
 }
-
 
 class PhaseCheck_noLatchNoOverride(pc: PhaseContext) extends PhaseCheck{
 
@@ -2090,6 +2193,20 @@ class PhasePropagateNames(pc: PhaseContext) extends PhaseMisc {
   override def impl(pc: PhaseContext) : Unit = {
     import pc._
 
+//    walkComponents{ c =>
+//      for((key, pulledData) <- c.pulledDataCache; if pulledData.hasTag(PropagatePullNameTag)){
+//        def rec(c : Component): Unit = {
+//          c.pulledDataCache.get(pulledData) match {
+//            case Some(x) => {
+//              c.setName(key.getName())
+//              c.children.foreach(rec)
+//            }
+//            case None =>
+//          }
+//        }
+//        pulledData.component.children.foreach(rec)
+//      }
+//    }
 
     walkStatements{
       case dst : BaseType => if (dst.isNamed) {
@@ -2126,15 +2243,15 @@ class PhaseAllocateNames(pc: PhaseContext) extends PhaseMisc{
     }
 
 
-    for((enum, encodings) <- enums;
+    for((senum, encodings) <- enums;
         encodingsScope = new NamingScope(duplicationPostfix);
         encoding <- encodings){
 
       reservedKeyWords.foreach(encodingsScope.allocateName(_))
-      for (el <- enum.elements) {
+      for (el <- senum.elements) {
         el.setName(encodingsScope.allocateName(el.getName()))
       }
-      
+
       if (encoding.isWeak)
         encoding.setName(encodingsScope.allocateName(encoding.getName()))
       else
@@ -2144,7 +2261,7 @@ class PhaseAllocateNames(pc: PhaseContext) extends PhaseMisc{
     for (c <- sortedComponents) {
       if (c.isInstanceOf[BlackBox] && c.asInstanceOf[BlackBox].isBlackBox)
         globalScope.lockName(c.definitionName)
-      else
+      else if(!c.definitionNameNoMerge)
         c.definitionName = globalScope.allocateName(c.definitionName)
     }
 
@@ -2226,13 +2343,13 @@ class PhaseCreateComponent(gen: => Component)(pc: PhaseContext) extends PhaseNet
 
 
     Engine.create {
-      defaultClockDomain.push()
+      val ctx = ClockDomainStack.set(defaultClockDomain)
       native //Avoid unconstructable during phase
       binarySequential
       binaryOneHot
       gen
-      defaultClockDomain.pop()
-      assert(DslScopeStack.isEmpty, "The SpinalHDL context seems wrong, did you included the idslplugin in your scala build scripts ? This is a Scala compiler plugin, see https://github.com/SpinalHDL/SpinalTemplateSbt/blob/666dcbba79181659d0c736eb931d19ec1dc17a25/build.sbt#L13.")
+      ctx.restore()
+//      assert(DslScopeStack.get != null, "The SpinalHDL context seems wrong, did you included the idslplugin in your scala build scripts ? This is a Scala compiler plugin, see https://github.com/SpinalHDL/SpinalTemplateSbt/blob/666dcbba79181659d0c736eb931d19ec1dc17a25/build.sbt#L13.")
     }
 
 //    //Ensure there is no prepop tasks remaining, as things can be quite aggresively context switched since the fiber update
@@ -2366,6 +2483,7 @@ object SpinalVhdlBoot{
     phases += new PhaseCheckIoBundle()
     phases += new PhaseCheckHiearchy()
     phases += new PhaseAnalog()
+    phases += new PhaseNextifyReg()
     phases += new PhaseRemoveUselessStuff(false, false)
     phases += new PhaseRemoveIntermediateUnnameds(true)
 
@@ -2490,6 +2608,7 @@ object SpinalVerilogBoot{
     phases += new PhaseCheckIoBundle()
     phases += new PhaseCheckHiearchy()
     phases += new PhaseAnalog()
+    phases += new PhaseNextifyReg()
     phases += new PhaseRemoveUselessStuff(false, false)
     phases += new PhaseRemoveIntermediateUnnameds(true)
 

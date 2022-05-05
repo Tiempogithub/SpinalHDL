@@ -38,6 +38,7 @@ trait Expression extends BaseNode with ExpressionContainer {
   }
 
   override def toString = opName
+  def toStringRec(level : Int = 1) : String = toString
 }
 
 
@@ -234,6 +235,23 @@ abstract class BinaryOperator extends Operator {
 
 abstract class BinaryOperatorWidthableInputs extends BinaryOperator {
   override type T = Expression with WidthProvider
+
+  def checkLiteralRange(check : (BitVectorLiteral, Expression with WidthProvider) => Unit): Unit ={
+    (left, right) match {
+      case (_ : BitVectorLiteral, _ : BitVectorLiteral) =>
+      case (lit : BitVectorLiteral, value : T) => check(lit, value)
+      case (value : T, lit : BitVectorLiteral) => check(lit, value)
+      case _ =>
+    }
+  }
+
+  def checkLiteralRanges(signed  : Boolean) ={
+    checkLiteralRange { (lit, value) =>
+      if(lit.poisonMask == null && lit.getWidth > value.getWidth) {
+        PendingError(s"OUT OF RANGE CONSTANT. Operator ${this.toStringMultiLine} is checking a value against a out of range constant\n${this.getScalaLocationLong}")
+      }
+    }
+  }
 }
 
 
@@ -295,6 +313,38 @@ object InferWidth
   */
 object Operator {
   object Formal{
+
+    class RandomExpKind
+    val RANDOM_ANY_SEQ = new RandomExpKind()
+    val RANDOM_ANY_CONST = new RandomExpKind()
+    val RANDOM_ALL_SEQ = new RandomExpKind()
+    val RANDOM_ALL_CONST = new RandomExpKind()
+    abstract class RandomExp(val kind : RandomExpKind) extends Expression{
+      override def remapExpressions(func: Expression => Expression) = {}
+      override def foreachExpression(func: Expression => Unit) = {}
+      override def opName: String = "$random()"
+    }
+    class RandomExpBool(kind : RandomExpKind) extends RandomExp(kind) {
+      override def getTypeObject = TypeBool
+    }
+    abstract class RandomExpBitVector(kind : RandomExpKind, val width : Int) extends RandomExp(kind) with WidthProvider {
+      override def getWidth = width
+    }
+    class RandomExpBits(kind : RandomExpKind, width : Int) extends RandomExpBitVector(kind, width) {
+      override def getTypeObject = TypeBits
+    }
+    class RandomExpUInt(kind : RandomExpKind, width : Int) extends RandomExpBitVector(kind, width) {
+      override def getTypeObject = TypeUInt
+    }
+    class RandomExpSInt(kind : RandomExpKind, width : Int) extends RandomExpBitVector(kind, width) {
+      override def getTypeObject = TypeSInt
+    }
+    class RandomExpEnum(enumDef: SpinalEnum, kind : RandomExpKind) extends RandomExp(kind) with InferableEnumEncodingImpl{
+      override def getTypeObject = TypeEnum
+      override private[core] def getDefaultEncoding(): SpinalEnumEncoding = enumDef.defaultEncoding
+      override def getDefinition: SpinalEnum = enumDef
+    }
+
     abstract class Past(val delay : Int) extends UnaryOperator
 
     class PastBool(delay : Int) extends Past(delay) {
@@ -407,6 +457,26 @@ object Operator {
     * BitVector operator
     */
   object BitVector {
+    class orR extends UnaryOperator {
+      override type T = Expression with WidthProvider
+      override def getTypeObject = TypeBool
+      override def opName: String = "| Bits"
+      override def simplifyNode = if(source.getWidth == 0) new BoolLiteral(false) else this
+    }
+
+    class andR extends UnaryOperator {
+      override type T = Expression with WidthProvider
+      override def getTypeObject = TypeBool
+      override def opName: String = "& Bits"
+      override def simplifyNode = if(source.getWidth == 0) new BoolLiteral(true) else this
+    }
+
+    class xorR extends UnaryOperator {
+      override type T = Expression with WidthProvider
+      override def getTypeObject = TypeBool
+      override def opName: String = "^ Bits"
+      override def simplifyNode = if(source.getWidth == 0) new BoolLiteral(false) else this
+    }
 
     abstract class And extends BinaryOperatorWidthableInputs with Widthable {
       def resizeFactory: Resize
@@ -531,7 +601,7 @@ object Operator {
     }
 
     abstract class ShiftLeftByUInt extends BinaryOperatorWidthableInputs with Widthable with ShiftOperator {
-      override def calcWidth(): Int = left.getWidth + (1 << right.getWidth) - 1
+      override def calcWidth(): Int = left.getWidth + (1 << right.getWidth.min(30)) - 1
       def getLiteralFactory: (BigInt, Int) => BitVectorLiteral
       override def simplifyNode: Expression = {
         if(left.getWidth == 0){
@@ -606,6 +676,7 @@ object Operator {
     class Equal extends BitVector.Equal {
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(false)
         left = InputNormalize.resizedOrUnfixedLit(left, targetWidth, new ResizeBits, right, this)
         right = InputNormalize.resizedOrUnfixedLit(right, targetWidth, new ResizeBits, left, this)
       }
@@ -615,6 +686,7 @@ object Operator {
     class NotEqual extends BitVector.NotEqual {
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(false)
         left = InputNormalize.resizedOrUnfixedLit(left, targetWidth, new ResizeBits, right, this)
         right = InputNormalize.resizedOrUnfixedLit(right, targetWidth, new ResizeBits, left, this)
       }
@@ -723,6 +795,7 @@ object Operator {
       override def simplifyNode: Expression = {SymplifyNode.binaryThatIfBoth(new BoolLiteral(false))(this)}
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(false)
         left  = InputNormalize.resize(left, targetWidth, new ResizeUInt)
         right = InputNormalize.resize(right, targetWidth, new ResizeUInt)
       }
@@ -734,6 +807,7 @@ object Operator {
       override def simplifyNode: Expression = {SymplifyNode.binaryThatIfBoth(new BoolLiteral(true))(this)}
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(false)
         left  = InputNormalize.resize(left, targetWidth, new ResizeUInt)
         right = InputNormalize.resize(right, targetWidth, new ResizeUInt)
       }
@@ -743,6 +817,7 @@ object Operator {
       override def opName: String = "UInt === UInt"
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(false)
         left  = InputNormalize.resize(left, targetWidth, new ResizeUInt)
         right = InputNormalize.resize(right, targetWidth, new ResizeUInt)
       }
@@ -752,6 +827,7 @@ object Operator {
       override def opName: String = "UInt =/= UInt"
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(false)
         left  = InputNormalize.resize(left, targetWidth, new ResizeUInt)
         right = InputNormalize.resize(right, targetWidth, new ResizeUInt)
       }
@@ -865,6 +941,7 @@ object Operator {
       override def simplifyNode: Expression = {SymplifyNode.binaryThatIfBoth(new BoolLiteral(false))(this)}
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(true)
         left  = InputNormalize.resize(left, targetWidth, new ResizeSInt)
         right = InputNormalize.resize(right, targetWidth, new ResizeSInt)
       }
@@ -876,6 +953,7 @@ object Operator {
       override def simplifyNode: Expression = {SymplifyNode.binaryThatIfBoth(new BoolLiteral(true))(this)}
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(true)
         left  = InputNormalize.resize(left, targetWidth, new ResizeSInt)
         right = InputNormalize.resize(right, targetWidth, new ResizeSInt)
       }
@@ -885,6 +963,7 @@ object Operator {
       override def opName: String = "SInt === SInt"
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(true)
         left  = InputNormalize.resize(left, targetWidth, new ResizeSInt)
         right = InputNormalize.resize(right, targetWidth, new ResizeSInt)
       }
@@ -894,6 +973,7 @@ object Operator {
       override def opName: String = "SInt =/= SInt"
       override def normalizeInputs: Unit = {
         val targetWidth = InferWidth.notResizableElseMax(this)
+        checkLiteralRanges(true)
         left  = InputNormalize.resize(left, targetWidth, new ResizeSInt)
         right = InputNormalize.resize(right, targetWidth, new ResizeSInt)
       }
@@ -1189,7 +1269,9 @@ class MultiplexerEnum(enumDef: SpinalEnum) extends Multiplexer with InferableEnu
   override private[core] def getDefaultEncoding(): SpinalEnumEncoding = enumDef.defaultEncoding
   override def normalizeInputs: Unit = {
     super.normalizeInputs
-    InputNormalize.enumImpl(this)
+    for(i <- 0 until inputs.size){
+      inputs(i) =  InputNormalize.enumImpl(this, inputs(i))
+    }
   }
   override def getTypeObject: Any = TypeEnum
 }
@@ -1278,7 +1360,8 @@ class BinaryMultiplexerEnum(enumDef : SpinalEnum) extends BinaryMultiplexer with
   override def getDefinition: SpinalEnum = enumDef
   override private[core] def getDefaultEncoding(): SpinalEnumEncoding = enumDef.defaultEncoding
   override def normalizeInputs: Unit = {
-    InputNormalize.enumImpl(this)
+    whenTrue = InputNormalize.enumImpl(this, whenTrue)
+    whenFalse = InputNormalize.enumImpl(this, whenFalse)
   }
   override def getTypeObject: Any = TypeEnum
 }
@@ -1877,6 +1960,7 @@ abstract class AssignmentExpression extends Expression {
   */
 abstract class BitVectorAssignmentExpression extends AssignmentExpression {
   def minimalTargetWidth: Int
+  def copyWithTarget(target : BitVector) : BitVectorAssignmentExpression
 }
 
 
@@ -1896,6 +1980,8 @@ class BitAssignmentFixed() extends BitVectorAssignmentExpression with ScalaLocat
 
   var out: BitVector = null
   var bitId: Int = -1
+
+  override def copyWithTarget(target: BitVector) = BitAssignmentFixed(target, bitId)
 
   override def getTypeObject = TypeBool
 
@@ -1956,6 +2042,8 @@ class RangedAssignmentFixed() extends BitVectorAssignmentExpression with WidthPr
   var hi = -1
   var lo = 0
 
+  override def copyWithTarget(target: BitVector) = RangedAssignmentFixed(target, hi, lo)
+
   override def getWidth: Int = hi + 1 - lo
   override def finalTarget: BaseType = out
   override def minimalTargetWidth: Int = hi+1
@@ -1984,7 +2072,7 @@ class RangedAssignmentFixed() extends BitVectorAssignmentExpression with WidthPr
   * Bit assignment with floating index
   */
 object BitAssignmentFloating {
-  def apply(out: BitVector, bitId: UInt): BitAssignmentFloating = {
+  def apply(out: BitVector, bitId: Expression with WidthProvider): BitAssignmentFloating = {
     val assign = new BitAssignmentFloating
     assign.out   = out
     assign.bitId = bitId
@@ -1996,6 +2084,9 @@ class BitAssignmentFloating() extends BitVectorAssignmentExpression with ScalaLo
 
   var out: BitVector = null
   var bitId: Expression with WidthProvider = null
+
+
+  override def copyWithTarget(target: BitVector) = BitAssignmentFloating(target, bitId)
 
   override def getTypeObject = TypeBool
   override def finalTarget: BaseType = out
@@ -2045,7 +2136,7 @@ class BitAssignmentFloating() extends BitVectorAssignmentExpression with ScalaLo
   * Range assignment with a floating range
   */
 object RangedAssignmentFloating{
-  def apply(out: BitVector,offset: UInt,bitCount: Int): RangedAssignmentFloating = {
+  def apply(out: BitVector,offset: Expression with WidthProvider, bitCount: Int): RangedAssignmentFloating = {
     val assign = new RangedAssignmentFloating
     assign.out = out
     assign.offset = offset
@@ -2058,6 +2149,8 @@ class RangedAssignmentFloating() extends BitVectorAssignmentExpression with Widt
   var out: BitVector = null
   var offset: Expression with WidthProvider = null
   var bitCount: Int = -1
+
+  override def copyWithTarget(target: BitVector) = RangedAssignmentFloating(target, offset, bitCount)
 
   override def getTypeObject = out.getTypeObject
 

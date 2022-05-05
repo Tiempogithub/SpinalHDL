@@ -44,6 +44,7 @@ object BaseType{
   final val isTypeNodeMask = 2
   final val isVitalMask    = 4
   final val isAnalogMask   = 8
+  final val isFrozen       = 16
 }
 
 /**
@@ -79,6 +80,18 @@ abstract class BaseType extends Data with DeclarationStatement with StatementDou
     btFlags &= ~(BaseType.isRegMask | BaseType.isAnalogMask); this
   }
 
+  override def freeze(): this.type = {
+    btFlags |= BaseType.isFrozen; this
+  }
+
+  override def unfreeze(): this.type = {
+    btFlags &= ~BaseType.isFrozen; this
+  }
+
+  def isFrozen(): Boolean = {
+    (btFlags & BaseType.isFrozen) != 0
+  }
+
   /** Is the baseType a node */
   def isTypeNode = (btFlags & BaseType.isTypeNodeMask) != 0
 
@@ -107,6 +120,11 @@ abstract class BaseType extends Data with DeclarationStatement with StatementDou
   def hasInit: Boolean = {
     require(isReg)
     foreachStatements(s => if (s.isInstanceOf[InitAssignmentStatement]) return true)
+    false
+  }
+
+  def hasDataAssignment: Boolean = {
+    foreachStatements(s => if (s.isInstanceOf[DataAssignmentStatement]) return true)
     false
   }
 
@@ -201,7 +219,9 @@ abstract class BaseType extends Data with DeclarationStatement with StatementDou
         InitAssignmentStatement(target = target.asInstanceOf[Expression], source = that)
       case `InitialAssign` => InitialAssignmentStatement(target = target.asInstanceOf[Expression], source = that)
     }
-
+    if(isFrozen()){
+      LocatedPendingError(s"FROZEN ASSIGNED :\n$this := $that")
+    }
     that match {
       case that : Expression if that.getTypeObject == target.asInstanceOf[Expression].getTypeObject =>
         DslScopeStack.get.append(statement(that))
@@ -231,8 +251,8 @@ abstract class BaseType extends Data with DeclarationStatement with StatementDou
   override def rootScopeStatement = if(isInput) component.parentScope else parentScope
 
   override def clone: this.type = {
-    val res = this.getClass.newInstance.asInstanceOf[this.type]
-    res
+    val res = this.getClass.newInstance
+    res.asInstanceOf[this.type]
   }
 
 
@@ -269,7 +289,7 @@ abstract class BaseType extends Data with DeclarationStatement with StatementDou
   private[core] def wrapWithWeakClone(e: Expression): this.type = {
     val typeNode = weakClone.setAsTypeNode()
     typeNode.assignFrom(e)
-    typeNode
+    typeNode.asInstanceOf[this.type]
   }
 
   private[core] def wrapWithBool(e: Expression): Bool = {
@@ -342,5 +362,13 @@ abstract class BaseType extends Data with DeclarationStatement with StatementDou
       s"(${(if (component != null) component.getPath() + "/" else "") + this.getDisplayName()} : ${dirString()} $getClassIdentifier)"
     else
       head.source.toString
+  }
+
+  override def getAheadValue() : this.type = {
+    assert(this.isReg, "Next value is only for regs")
+    val ret = this.parentScope.onHead(this.clone).asInstanceOf[this.type].setCompositeName(this, "aheadValue", true)
+    this.addTag(new PhaseNextifyTag(ret))
+    ret.freeze()
+    ret.pull().asInstanceOf[this.type]
   }
 }

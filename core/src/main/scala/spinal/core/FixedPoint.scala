@@ -20,6 +20,9 @@
 \*                                                                           */
 package spinal.core
 
+import spinal.core.internals.ScopeStatement
+
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 sealed trait RoundType
@@ -45,13 +48,13 @@ case class FixPointConfig(roundType: RoundType,
     }
   }
   def apply[B](body : => B): B = on(body)
-  def setAsDefault() = FixPointProperty.setDefault(this)
+  def setAsDefault() = FixPointProperty.set(this)
 }
 
 
 
 object FixPointProperty extends ScopeProperty[FixPointConfig]{
-  var _default: FixPointConfig = DefaultFixPointConfig
+  override def default = DefaultFixPointConfig
 }
 
 object getFixRound{
@@ -134,8 +137,6 @@ object getFixSym{
 //    SpinalInfo(pretag + " " + FixPointConfig(getFixRound(),getFixSym()).toString())
 //  }
 //}
-
-
 
 
 
@@ -342,8 +343,8 @@ class SFix(maxExp: Int, bitCount: Int) extends XFix[SFix, SInt](maxExp, bitCount
   def :=(that: Float): Unit = this := BigDecimal(that.toDouble)
 
   def :=(that: BigDecimal): Unit = {
-    assert(that <= this.maxValue, s"Literal $that is to big to be assigned in $this")
-    assert(that >= this.minValue, s"Literal $that is to negative to be assigned in this $this")
+    assert(that <= this.maxValue, s"Literal $that is too big to be assigned in $this")
+    assert(that >= this.minValue, s"Literal $that is too negative to be assigned in this $this")
 
     val shift = bitCount - maxExp - 1
     val value = if(shift >= 0)
@@ -354,8 +355,8 @@ class SFix(maxExp: Int, bitCount: Int) extends XFix[SFix, SInt](maxExp, bitCount
   }
 
   def :=(that: BigInt): Unit = {
-    assert(BigDecimal(that) <= this.maxValue, s"Literal $that is to big to be assigned in $this")
-    assert(BigDecimal(that)  >= this.minValue, s"Literal $that is to negative to be assigned in this $this")
+    assert(BigDecimal(that) <= this.maxValue, s"Literal $that is too big to be assigned in $this")
+    assert(BigDecimal(that)  >= this.minValue, s"Literal $that is too negative to be assigned in this $this")
 
     val minExp = this.minExp
     if (minExp > 0)
@@ -408,7 +409,7 @@ class SFix2D(val maxExp: Int, val bitCount: Int) extends Bundle {
     copy.y := this.y
     copy.x.addTag(tagTruncated)
     copy.y.addTag(tagTruncated)
-    copy
+    copy.asInstanceOf[this.type]
   }
 
   override def clone: this.type = new SFix2D(maxExp, bitCount).asInstanceOf[this.type]
@@ -458,7 +459,7 @@ class UFix(maxExp: Int, bitCount: Int) extends XFix[UFix, UInt](maxExp, bitCount
 
   def :=(that: BigDecimal): Unit = {
     assert(that >= 0)
-    assert(that <= this.maxValue, s"Literal $that is to big to be assigned in this $this")
+    assert(that <= this.maxValue, s"Literal $that is too big to be assigned in this $this")
 
     val shift = bitCount - maxExp
     val value = if(shift >= 0)
@@ -470,7 +471,7 @@ class UFix(maxExp: Int, bitCount: Int) extends XFix[UFix, UInt](maxExp, bitCount
 
   def :=(that: BigInt): Unit = {
     assert(that >= 0)
-    assert(that < (BigInt(1) << maxExp), s"Literal $that is to big to be assigned in this $this")
+    assert(that < (BigInt(1) << maxExp), s"Literal $that is too big to be assigned in this $this")
 
     val minExp = this.minExp
     if (minExp > 0)
@@ -529,7 +530,7 @@ class UFix2D(val maxExp: Int, val bitCount: Int) extends Bundle {
     copy.y := this.y
     copy.x.addTag(tagTruncated)
     copy.y.addTag(tagTruncated)
-    copy
+    copy.asInstanceOf[this.type]
   }
 
   override def clone: UFix2D.this.type = new UFix2D(maxExp, bitCount).asInstanceOf[this.type]
