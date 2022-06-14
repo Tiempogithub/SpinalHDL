@@ -687,7 +687,7 @@ object MemMiscIn{
 }
 class MemMiscIn() extends MemPortStatement with WidthProvider with SpinalTagReady {
 
-  var mem         : Mem[_] = null
+  //var mem         : Mem[_] = null
   var width       : Int = -1
   var data        : Expression with WidthProvider = null
   var clockDomain : ClockDomain = null
