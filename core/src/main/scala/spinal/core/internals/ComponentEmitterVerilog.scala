@@ -138,6 +138,7 @@ class ComponentEmitterVerilog(
             declarations ++= emitExpressionWrap(s, name, "reg")
             wrappedExpressionToName(s) = name
           case s: MemWrite    =>
+          case s: MemMiscIn    =>
         }
         portId += 1
       })
@@ -1262,6 +1263,7 @@ end
     }
 
     mem.foreachStatements{
+      case memMiscIn: MemMiscIn =>
       case memWrite: MemWrite      =>
         emitClockedProcess((tab, b) => {
           if(allowReadSyncReadFirst){

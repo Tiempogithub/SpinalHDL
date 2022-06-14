@@ -1642,6 +1642,7 @@ object StreamFifoMultiChannelBench extends App{
   Bench(rtls, targets)
 }
 
+
 object StreamTransactionCounter {
     def apply[T <: Data, T2 <: Data](
         trigger: Stream[T],
@@ -1766,4 +1767,77 @@ class StreamTransactionExtender[T <: Data, T2 <: Data](
     io.done := counter.io.done
     io.first := (counter.io.value === 0) && counter.io.working
     io.working := counter.io.working
+}
+
+object StreamFifoWithRamPeek{
+  def apply[T <: Data](dataType: T, depth: Int,initArray :Array[BigInt]) = new StreamFifoWithRamPeek(dataType,depth,initArray)
+}
+
+class StreamFifoWithRamPeek[T <: Data](dataType: HardType[T], depth: Int, initArray :Array[BigInt] ) extends Component {
+  require(depth > 1)
+  val io = new Bundle {
+    val push = slave Stream (dataType)
+    val pop = master Stream (dataType)
+    val flush = in Bool() default(False)
+    val occupancy    = out UInt (log2Up(depth + 1) bits)
+    val availability = out UInt (log2Up(depth + 1) bits)
+    val peekRam= master Flow(Bits(dataType.getBitsWidth*depth bits))
+  }
+
+
+  val logic = (depth > 1) generate new Area {
+    val ram = Vec(Reg(dataType), depth)
+    val width =dataType.getBitsWidth
+    ram.zipWithIndex.map{ case(element,index) =>
+      var init = dataType()
+      init.assignFromBits(B(initArray(index),width bits))
+      element.init(init)
+    }
+
+    val pushPtr = Counter(depth)
+    val popPtr = Counter(depth)
+    val ptrMatch = pushPtr === popPtr
+    val risingOccupancy = RegInit(False)
+    val pushing = io.push.fire
+    val popping = io.pop.fire
+    val empty = ptrMatch & !risingOccupancy
+    val full = ptrMatch & risingOccupancy
+
+    io.peekRam.payload:= ram.map(_.asBits).reduce(_.asBits ## _.asBits)
+    io.peekRam.valid:=full
+    io.push.ready := !full
+    io.pop.valid := !empty & !(RegNext(popPtr.valueNext === pushPtr, False) & !full) //mem write to read propagation
+    io.pop.payload := ram(popPtr.valueNext)
+
+    when(pushing =/= popping) {
+      risingOccupancy := pushing
+    }
+    when(pushing) {
+      ram(pushPtr.value) := io.push.payload
+      pushPtr.increment()
+    }
+    when(popping) {
+      popPtr.increment()
+    }
+
+    val ptrDif = pushPtr - popPtr
+    if (isPow2(depth)) {
+      io.occupancy := ((risingOccupancy && ptrMatch) ## ptrDif).asUInt
+      io.availability := ((!risingOccupancy && ptrMatch) ## (popPtr - pushPtr)).asUInt
+    } else {
+      when(ptrMatch) {
+        io.occupancy    := Mux(risingOccupancy, U(depth), U(0))
+        io.availability := Mux(risingOccupancy, U(0), U(depth))
+      } otherwise {
+        io.occupancy := Mux(pushPtr > popPtr, ptrDif, U(depth) + ptrDif)
+        io.availability := Mux(pushPtr > popPtr, U(depth) + (popPtr - pushPtr), (popPtr - pushPtr))
+      }
+    }
+
+    when(io.flush){
+      pushPtr.clear()
+      popPtr.clear()
+      risingOccupancy := False
+    }
+  }
 }

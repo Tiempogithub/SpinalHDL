@@ -89,9 +89,15 @@ object registerFile extends MemTechnologyKind {
 
 object Mem {
   def apply[T <: Data](wordType: HardType[T], wordCount: Int) = new Mem(wordType, wordCount)
+  def apply[T <: Data](wordType: HardType[T], wordCount: Int, miscInWidth: Int, miscOutWidth: Int) = new Mem(wordType, wordCount, miscInWidth, miscOutWidth)
+  def apply[T <: Data](wordType: HardType[T], wordCount: Int, miscInWidth: Int) = new Mem(wordType, wordCount, miscInWidth, 0)
   def apply[T <: Data](wordType: HardType[T], wordCount: BigInt) = {
     assert(wordCount <= Integer.MAX_VALUE)
     new Mem(wordType, wordCount.toInt)
+  }
+  def apply[T <: Data](wordType: HardType[T], wordCount: BigInt, miscInWidth: Int, miscOutWidth: Int) = {
+    assert(wordCount <= Integer.MAX_VALUE)
+    new Mem(wordType, wordCount.toInt, miscInWidth, miscOutWidth)
   }
 
   def apply[T <: Data](wordType: HardType[T], initialContent: Seq[T]) = new Mem(wordType, initialContent.length) init(initialContent)
@@ -113,8 +119,11 @@ trait MemPortStatement extends LeafStatement with StatementDoubleLinkedContainer
 }
 
 
-class Mem[T <: Data](val wordType: HardType[T], val wordCount: Int) extends DeclarationStatement with StatementDoubleLinkedContainer[Mem[_], MemPortStatement] with WidthProvider with SpinalTagReady with InComponent{
+class Mem[T <: Data](val wordType: HardType[T], val wordCount: Int,
+                     val miscInWidth: Int = 0, val miscOutWidth: Int = 0) extends DeclarationStatement with StatementDoubleLinkedContainer[Mem[_], MemPortStatement] with WidthProvider with SpinalTagReady with InComponent{
   if(parentScope != null) parentScope.append(this)
+  //val miscIn = if(miscInWidth != 0) in(Bits(miscInWidth bits)) else null
+  val miscOut= if(miscOutWidth != 0) out(Bits(miscOutWidth bits)) else null
 
   var forceMemToBlackboxTranslation = false
   val _widths = wordType().flatten.map(t => t.getBitsWidth).toVector //Force to fix width of each wire
@@ -310,6 +319,14 @@ class Mem[T <: Data](val wordType: HardType[T], val wordCount: Int) extends Decl
     readSync(address, enable, readUnderWrite, true)
   }
 
+  def miscIn(data: Bits) : Unit = miscInImpl(data)
+
+  def miscInImpl(data: Bits): Unit = {
+    val miscInPort = MemMiscIn(this, data,ClockDomain.current)
+    this.parentScope.append(miscInPort)
+    this.dlcAppend(miscInPort)
+  }
+
   def writeMixedWidth(address: UInt, data: Data, enable : Bool = null, mask: Bits = null): Unit = writeImpl(address, data, enable, mask, allowMixedWidth = true)
   def write(address: UInt, data: T,enable : Bool = null, mask: Bits = null) : Unit = writeImpl(address, data, enable, mask, allowMixedWidth = false)
 
@@ -491,6 +508,7 @@ class Mem[T <: Data](val wordType: HardType[T], val wordCount: Int) extends Decl
         }
       case port: MemReadSync  =>
       case port: MemReadAsync =>
+      case port: MemMiscIn => //do nothing
     }
     symbolWidth
   }
@@ -656,6 +674,50 @@ class MemReadSync() extends MemPortStatement with WidthProvider with SpinalTagRe
   override def foreachClockDomain(func: (ClockDomain) => Unit): Unit = func(clockDomain)
 }
 
+object MemMiscIn{
+  def apply(mem: Mem[_], data: Bits, clockDomain: ClockDomain): MemMiscIn = {
+    val ret = new MemMiscIn
+    println("MemMiscIn.apply")
+    ret.mem         = mem
+    ret.clockDomain = clockDomain
+    ret.width       = data.getBitsWidth
+    ret.data        = data
+    ret
+  }
+}
+class MemMiscIn() extends MemPortStatement with WidthProvider with SpinalTagReady {
+
+  var mem         : Mem[_] = null
+  var width       : Int = -1
+  var data        : Expression with WidthProvider = null
+  var clockDomain : ClockDomain = null
+
+  override def dlcParent = mem
+
+  override def addAttribute(attribute: Attribute): this.type = addTag(attribute)
+
+  override def getWidth = width
+
+  override def remapExpressions(func: Expression => Expression): Unit = {
+    data    = stabilized(func, data).asInstanceOf[Expression with WidthProvider]
+  }
+
+  override def foreachExpression(func: Expression => Unit): Unit = {
+    func(data)
+  }
+
+  override def foreachDrivingExpression(func: Expression => Unit): Unit = {
+    func(data)
+  }
+
+  override def normalizeInputs: Unit = {
+
+  }
+
+  def aspectRatio = 1
+
+  override def foreachClockDomain(func: (ClockDomain) => Unit): Unit = func(clockDomain)
+}
 
 object MemWrite{
   def apply(mem: Mem[_], address: UInt, data: Bits, mask: Bits, enable: Bool, width : Int, clockDomain: ClockDomain): MemWrite = {

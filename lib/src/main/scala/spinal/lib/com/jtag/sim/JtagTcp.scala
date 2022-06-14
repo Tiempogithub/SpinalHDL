@@ -8,12 +8,12 @@ import spinal.lib.com.jtag.Jtag
 
 
 object JtagTcp {
-  def apply(jtag: Jtag, jtagClkPeriod: Long) = fork {
+  def apply(jtag: Jtag, jtagClkPeriod: Long, port: Int = 7894) = fork {
     var inputStream: InputStream = null
     var outputStream: OutputStream = null
 
     class SocketThread extends Thread  {
-      val socket = new ServerSocket(7894)
+      val socket = new ServerSocket(port)
       override def run() : Unit = {
         println("WAITING FOR TCP JTAG CONNECTION")
         while (true) {

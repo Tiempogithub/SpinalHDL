@@ -94,7 +94,8 @@ class Ram_1w_1rs(
 
   rdClock        : ClockDomain,
   rdAddressWidth : Int,
-  rdDataWidth    : Int
+  rdDataWidth    : Int,
+  miscInWidth    : Int = 1
 ) extends BlackBox {
 
   val generic = new Generic {
@@ -111,6 +112,7 @@ class Ram_1w_1rs(
 
     val rdAddressWidth = Ram_1w_1rs.this.rdAddressWidth
     val rdDataWidth    = Ram_1w_1rs.this.rdDataWidth
+    val miscInWidth    = Ram_1w_1rs.this.miscInWidth
   }
 
   val io = new Bundle {
@@ -128,6 +130,8 @@ class Ram_1w_1rs(
       val addr = in  UInt(rdAddressWidth bit)
       val data = out Bits(rdDataWidth bit)
     }
+
+    val miscIn = in(Bits(miscInWidth bits))
   }
 
   mapClockDomain(wrClock,io.wr.clk)
@@ -227,14 +231,15 @@ class Ram_1wors(wordWidth: Int, wordCount: Int, readUnderWrite: ReadUnderWritePo
   * Ram 1wrs
   */
 class Ram_1wrs(
-  wordWidth      : Int,
-  wordCount      : Int,
-  technology     : MemTechnologyKind,
-  readUnderWrite : ReadUnderWritePolicy = dontCare,
-  duringWrite    : DuringWritePolicy = dontCare,
-  maskWidth      : Int,
-  maskEnable     : Boolean
-) extends BlackBox {
+                       wordWidth      : Int,
+                       wordCount      : Int,
+                       technology     : MemTechnologyKind,
+                       readUnderWrite : ReadUnderWritePolicy = dontCare,
+                       duringWrite    : DuringWritePolicy = dontCare,
+                       maskWidth      : Int,
+                       maskEnable     : Boolean,
+                       miscInWidth    : Int = 1
+                     ) extends BlackBox {
 
   val generic = new Generic {
     val wordCount      = Ram_1wrs.this.wordCount
@@ -244,6 +249,7 @@ class Ram_1wrs(
     val technology     = Ram_1wrs.this.technology.technologyKind
     val maskWidth      = Ram_1wrs.this.maskWidth
     val maskEnable     = Ram_1wrs.this.maskEnable
+    val miscInWidth    = Ram_1wrs.this.miscInWidth
   }
 
   val io = new Bundle {
@@ -254,12 +260,12 @@ class Ram_1wrs(
     val mask   =  in Bits(maskWidth bits)
     val wrData =  in Bits(wordWidth bit)
     val rdData = out Bits(wordWidth bit)
+    val miscIn = in(Bits(miscInWidth bits))
   }
 
   mapCurrentClockDomain(io.clk)
   noIoPrefix()
 }
-
 
 /**
   * Ram 2wrs
@@ -332,4 +338,39 @@ class Ram_2wrs(
   mapClockDomain(portA_clock,io.portA.clk)
   mapClockDomain(portB_clock,io.portB.clk)
   noIoPrefix()
+}
+
+/**
+  * Rom 1rs
+  */
+class Rom_1rs(
+                  wordWidth      : Int,
+                  wordCount      : Int,
+                  binFile        : String,
+                  technology     : MemTechnologyKind = auto,
+                  miscInWidth    : Int = 1
+                ) extends BlackBox {
+
+  val generic = new Generic {
+    val wordCount      = Rom_1rs.this.wordCount
+    val wordWidth      = Rom_1rs.this.wordWidth
+    val binFile        = Rom_1rs.this.binFile
+    val technology     = Rom_1rs.this.technology.technologyKind
+    val miscInWidth    = Rom_1rs.this.miscInWidth
+  }
+
+  val io = new Bundle {
+    val clk  = in Bool()
+    val en   = in Bool()
+    val addr = in  UInt(log2Up(wordCount) bit)
+    val data = out Bits(wordWidth bit)
+    val miscIn = in(Bits(miscInWidth bits))
+  }
+
+  mapCurrentClockDomain(io.clk)
+  noIoPrefix()
+/*//don't do that, it creates a reset input !
+  val mem = Mem(io.data, wordCount)
+  io.data := mem.readSync(io.addr, io.en)
+ */
 }

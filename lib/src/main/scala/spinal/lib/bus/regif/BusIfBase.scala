@@ -3,8 +3,9 @@ package spinal.lib.bus.regif
 import spinal.core._
 import spinal.lib.bus.amba3.apb._
 import spinal.lib.bus.misc.SizeMapping
-import language.experimental.macros
+import spinal.lib.bus.regif.CHeads.{RegInstCHead, RegInstCStruct}
 
+import language.experimental.macros
 import scala.collection.mutable.ListBuffer
 
 trait BusIfBase extends Area{
@@ -241,8 +242,44 @@ trait BusIf extends BusIfBase {
     vs.end()
   }
 
-  private def readGenerator() = {
-    when(askRead){
+
+//  @AutoInterrupt
+//  def interruptFactory2(regNamePre: String, triggers: Bool*): Bool = {
+//    triggers.size match {
+//      case 0 => SpinalError("There have no inputs Trigger signals")
+//      case x if x > busDataWidth => SpinalError(s"Trigger signal numbers exceed Bus data width ${busDataWidth}")
+//      case _ =>
+//    }
+//    False
+//  }
+
+//  private def HTML(docName: String) = {
+//    val pc = GlobalData.get.phaseContext
+//    def targetPath = s"${pc.config.targetDirectory}/${docName}.html"
+//    val body = RegInsts.map(_.trs(regPre)).mkString("\n")
+//    val html = DocTemplate.getHTML(docName, body)
+//    import java.io.PrintWriter
+//    val fp = new PrintWriter(targetPath)
+//    fp.write(html)
+//    fp.close
+//  }
+
+  def genCHead(cFileName: String) = {
+    val pc = GlobalData.get.phaseContext
+    def targetPath = s"${pc.config.targetDirectory}/${cFileName}.h"
+    val maxRegNameWidth = RegInsts.map(_.name.length).max + regPre.size
+    val heads   = RegInsts.map(_.cHeadDefine(maxRegNameWidth, regPre)).mkString("\n")
+    val structs = RegInsts.map(_.cStruct(regPre)).mkString("\n")
+    import java.io.PrintWriter
+    val fp = new PrintWriter(targetPath)
+    fp.write("#pragma once\n\n")
+    fp.write(heads)
+    fp.write("\n\n" + structs)
+    fp.close
+  }
+
+  def readGenerator() = {
+    when(doRead){
       switch (readAddress()) {
         RegInsts.foreach{(reg: RegInst) =>
           is(reg.addr){

@@ -13,22 +13,24 @@ the spinal doc for this can be found at https://spinalhdl.github.io/SpinalDoc-RT
 
  */
 case class PlicMapping(
-  gatewayPriorityOffset : Int,  // offset for each interrupt source priority (each is a 32bit register)
-  gatewayPendingOffset  : Int,  // offset for each interrupt source pending bit (as an array of bit)
-  targetEnableOffset    : Int,  // offset for each interrupt _PER TARGET_ enable bit (as an array of bit)
-  targetThresholdOffset : Int,  // offset for the target's interrupt priority threshold (one per target) 
-  targetClaimOffset     : Int,  // offset for the target's claim/complete register (one per target)
-  gatewayPriorityShift  : Int,  // shift for 1 bus-width word for the interrupt priority (eg. 32bit => 0x04 => 1<<2 => shift = 2)
-  targetThresholdShift  : Int,  // shift for the target threshold
-  targetClaimShift      : Int,  // shift fot the target claim/complete
-  targetEnableShift     : Int,  // shift for the target enable
-  gatewayPriorityWriteGen : Boolean = true,   // optional generation for write priority for each interrupt source
-  gatewayPriorityReadGen : Boolean,           // optional generation for read priority for each interrupt source
-  gatewayPendingReadGen : Boolean,            // optional generation for read pending bit for each interrupt source
-  targetThresholdWriteGen : Boolean = true,   // optional generation for write threshold for each target  
-  targetThresholdReadGen : Boolean,           // optional generation for read threshold for each target
-  targetEnableWriteGen : Boolean = true,      // optional generation for write enable bit for each target's interrupt
-  targetEnableReadGen : Boolean               // optional generation for read enable bit for each target's interrupt
+  gatewayPriorityOffset : Int,
+  gatewayPendingOffset  : Int,
+  targetEnableOffset    : Int,
+  targetThresholdOffset : Int,
+  targetClaimOffset     : Int,
+  gatewayPriorityShift  : Int,
+  targetThresholdShift  : Int,
+  targetClaimShift      : Int,
+  targetEnableShift     : Int,
+  gatewayPriorityWriteGen : Boolean = true,
+  gatewayPriorityReadGen : Boolean,
+  gatewayPendingReadGen : Boolean,
+  gatewayPendingClearGen : Boolean = false,
+  gatewayPendingSetGen : Boolean = false,
+  targetThresholdWriteGen : Boolean = true,
+  targetThresholdReadGen : Boolean,
+  targetEnableWriteGen : Boolean = true,
+  targetEnableReadGen : Boolean
 )
 
 object PlicMapping{
@@ -46,6 +48,24 @@ object PlicMapping{
     targetEnableShift     =       7,
     gatewayPriorityReadGen = true,
     gatewayPendingReadGen = true,
+    targetThresholdReadGen = true,
+    targetEnableReadGen = true
+  )
+
+  def tiempo = PlicMapping(
+    gatewayPriorityOffset =   0x0000,
+    gatewayPendingOffset  =   0x1000,
+    targetEnableOffset    =   0x2000,
+    targetThresholdOffset = 0x200000,
+    targetClaimOffset     = 0x200004,
+    gatewayPriorityShift  =       2,
+    targetThresholdShift  =      12,
+    targetClaimShift      =      12,
+    targetEnableShift     =       7,
+    gatewayPriorityReadGen = true,
+    gatewayPendingReadGen = true,
+    gatewayPendingClearGen = true,
+    gatewayPendingSetGen = true,
     targetThresholdReadGen = true,
     targetEnableReadGen = true
   )
@@ -81,12 +101,42 @@ object PlicMapper{
   // targets: the sequence of PlicTargets (eg. multiple cores) to generate the bus access control
   def apply(bus: BusSlaveFactory, mapping: PlicMapping)(gateways : Seq[PlicGateway], targets : Seq[PlicTarget]) = new Area{
     import mapping._
-    
     // for each gateway, generate priority register & pending bit as needed
     val gatewayMapping = for(gateway <- gateways) yield new Area{
       if(gatewayPriorityWriteGen && !gateway.priority.hasAssignement) bus.drive(gateway.priority, address = gatewayPriorityOffset + (gateway.id << gatewayPriorityShift), documentation = s"Driving priority for gateway ${gateway.getName()}. Inits to 0 (interrupt is disabled)" ) init(0)
       if(gatewayPriorityReadGen) bus.read(gateway.priority, address = gatewayPriorityOffset + (gateway.id << gatewayPriorityShift), documentation = s"Read priority for gateway ${gateway.getName()}")
-      if(gatewayPendingReadGen) bus.read(gateway.ip, address = gatewayPendingOffset + (gateway.id/bus.busDataWidth)*bus.busDataWidth/8, bitOffset = gateway.id % bus.busDataWidth, documentation = s"Read Pending bit for gateway " + gateway.getName())
+
+      val bitOffset = gateway.id % bus.busDataWidth
+      val writeData = Bool()
+      bus.nonStopWrite(writeData,bitOffset)
+
+      val pendingReadAddress = gatewayPendingOffset + (gateway.id/bus.busDataWidth)*bus.busDataWidth/8
+      val pendingSetAddress = pendingReadAddress+0x800
+      if(gatewayPendingReadGen) bus.read(gateway.ip, address = pendingReadAddress, bitOffset = bitOffset, documentation = s"Read Pending bit for gateway " + gateway.getName())
+
+      if (gatewayPendingSetGen) {
+        /*
+        //SCOPE VIOLATION : (toplevel/when_PlicMapper_l120 :  Bool) is assigned outside its declaration scope at
+        when(writeData) {
+          when(bus.isWriting(pendingSetAddress)) {
+            gateway.doSwWrite(True)
+          }
+        }*/
+        //OK
+        when(bus.isWriting(pendingSetAddress)) {
+          when(writeData) {
+            gateway.doSwWrite(True)
+          }
+        }
+      }
+      if (gatewayPendingClearGen) {
+        when(bus.isWriting(pendingReadAddress)) {
+          when(writeData) {
+            gateway.doSwWrite(False)
+          }
+        }
+      }
+
     }
 
     // claim/complete logic

@@ -2,6 +2,7 @@ package spinal.lib.generator
 
 import spinal.core._
 import spinal.core.fiber._
+import spinal.lib
 import spinal.lib.BufferCC
 import spinal.lib.blackbox.xilinx.s7.BUFG
 
@@ -19,6 +20,8 @@ case class ClockDomainResetGenerator() extends Area {
   val inputClockDomain = Handle[ClockDomain]
   val holdDuration = Handle[Int]
   val powerOnReset = Handle.sync(false)
+  val fullyAsyncReset = Handle.sync(false)
+  val asyncAssert = Handle.sync(false)
 
 
   def setInput(input : Handle[ClockDomain]) = inputClockDomain.load(input)
@@ -41,16 +44,27 @@ case class ClockDomainResetGenerator() extends Area {
     )
   )
 
-  val outputClockDomain = Handle(
-    ClockDomain(
-      clock = inputClockDomain.clock,
-      reset = logic.outputReset,
-      frequency = inputClockDomain.frequency,
-      config = ClockDomainConfig(
-        resetKind = spinal.core.SYNC
+  val outputClockDomain = Handle {
+    if (fullyAsyncReset) {
+      ClockDomain(
+        clock = inputClockDomain.clock,
+        reset = logic.outputReset,
+        frequency = inputClockDomain.frequency,
+        config = ClockDomainConfig(
+          resetKind = spinal.core.ASYNC
+        )
       )
-    )
-  )
+    } else {
+      ClockDomain(
+        clock = inputClockDomain.clock,
+        reset = logic.outputReset,
+        frequency = inputClockDomain.frequency,
+        config = ClockDomainConfig(
+          resetKind = spinal.core.SYNC
+        )
+      )
+    }
+  }
 
   val logic = Handle{
     new ClockingArea(inputClockDomain.copy(reset = null, config = inputClockDomain.config.copy(resetKind = BOOT))) {
@@ -82,12 +96,26 @@ case class ClockDomainResetGenerator() extends Area {
           resetCounter := 0
         }
       }
-
+/*
+      val inputResetPos = Bool() // our reset input, with active high level
+      if(inputClockDomain.config.resetActiveLevel == HIGH)
+        inputResetPos := inputClockDomain.readResetWire
+      else
+        inputResetPos := !inputClockDomain.readResetWire
+*/
+      val inputResetPos = inputClockDomain.isResetActive
       //Create all reset used later in the design
-      val outputReset = RegNext(outputResetUnbuffered)
+      //val outputResetReg = inputClockDomain on RegNext(outputResetUnbuffered)
+      val outputResetReg = RegNext(outputResetUnbuffered)
+      val outputReset = Bool()
+      if(fullyAsyncReset | asyncAssert) {
+        outputReset := (inputResetPos | outputResetReg).addTag(crossClockDomain) //let async assert get through
+      } else {
+        outputReset := outputResetReg
+      }
 
       if(inputClockDomain.config.resetKind == BOOT || powerOnReset.get){
-        outputReset init(True)
+        outputResetReg init (True)
         holdingLogic.resetCounter init(0)
       }
     }
@@ -165,6 +193,77 @@ case class ClockDomainResetGenerator() extends Area {
   def enablePowerOnReset() = powerOnReset.load(true)
 }
 
+/*
+class ClockDomainAsyncResetGenerator() extends ClockDomainResetGenerator {
+
+  outputClockDomain.load(
+    ClockDomain(
+      clock = inputClockDomain.clock,
+      reset = logic.outputReset,
+      frequency = inputClockDomain.frequency,
+      config = ClockDomainConfig(
+        resetKind = spinal.core.ASYNC
+      )
+    )
+  )
+
+  logic.load(
+    new ClockingArea(inputClockDomain.copy(reset = null, config = inputClockDomain.config.copy(resetKind = BOOT))) {
+      val inputResetTrigger = False
+      val outputResetUnbuffered = False
+
+      val inputResetAdapter = (inputClockDomain.reset != null) generate {
+        val generator = ResetGenerator(ClockDomainAsyncResetGenerator.this)
+        generator.reset.load(inputClockDomain.reset)
+        generator.kind.load(inputClockDomain.config.resetKind)
+        generator.sensitivity.load(inputClockDomain.config.resetActiveLevel match {
+          case HIGH => ResetSensitivity.HIGH
+          case LOW => ResetSensitivity.LOW
+        })
+        generator
+      }
+
+      //Keep reset active for a while
+      val duration = holdDuration.get
+      val noHold = (duration == 0) generate outputResetUnbuffered.setWhen(inputResetTrigger)
+      val holdingLogic = (duration != 0) generate new Area {
+        val resetCounter = Reg(UInt(log2Up(duration + 1) bits))
+
+        when(resetCounter =/= duration) {
+          resetCounter := resetCounter + 1
+          outputResetUnbuffered := True
+        }
+        when(inputResetTrigger) {
+          resetCounter := 0
+        }
+      }
+      /*
+            //Create all reset used later in the design
+            val outputReset = inputClockDomain on RegNext(outputResetUnbuffered)
+
+            if(inputClockDomain.config.resetKind == BOOT || powerOnReset.get){
+              outputReset init(True)
+              holdingLogic.resetCounter init(0)
+            }*/
+
+      val inputResetPos = Bool() // our reset input, with active high level
+      if (inputClockDomain.config.resetActiveLevel == HIGH)
+        inputResetPos := inputClockDomain.readResetWire
+      else
+        inputResetPos := !inputClockDomain.readResetWire
+
+      //Create all reset used later in the design
+      val outputResetReg = inputClockDomain on RegNext(outputResetUnbuffered)
+      val outputReset = (inputResetPos | outputResetReg).addTag(crossClockDomain) //let async assert get through
+
+      if (inputClockDomain.config.resetKind == BOOT || powerOnReset.get) {
+        outputResetReg init (True)
+        holdingLogic.resetCounter init (0)
+      }
+    }
+  )
+}
+*/
 
 case class Arty7BufgGenerator() extends Area{
   val input = Handle[ClockDomain]

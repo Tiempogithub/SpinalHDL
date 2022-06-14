@@ -556,6 +556,8 @@ class PhaseAnalog extends PhaseNetlist{
 
 
 class MemTopology(val mem: Mem[_], val consumers : mutable.HashMap[Expression, ArrayBuffer[ExpressionContainer]] = mutable.HashMap[Expression, ArrayBuffer[ExpressionContainer]]()) {
+
+  val miscIn                   = ArrayBuffer[MemMiscIn]()
   val writes                   = ArrayBuffer[MemWrite]()
   val readsAsync               = ArrayBuffer[MemReadAsync]()
   val readsSync                = ArrayBuffer[MemReadSync]()
@@ -564,12 +566,17 @@ class MemTopology(val mem: Mem[_], val consumers : mutable.HashMap[Expression, A
 
   var portCount = 0
   mem.foreachStatements(s => {
-    portCount += 1
+    if(s.isInstanceOf[MemMiscIn]){
+
+    } else {
+      portCount += 1
+    }
     s match {
       case p: MemWrite     => writes += p
       case p: MemReadAsync => readsAsync += p
       case p: MemReadSync  => readsSync += p
       case p: MemReadWrite => readWriteSync += p
+      case p: MemMiscIn    => miscIn += p
     }
   })
 }
@@ -610,7 +617,14 @@ trait PhaseMemBlackboxing extends PhaseNetlist {
 
         mem.component.rework{
           val content = Bits(mem.width bits).allowOverride
+          println(mem)
           mem.foreachStatements{
+            case port : MemMiscIn => {
+              println("MemMiscIn statement")
+              val storage = port.clockDomain(Reg(Bits(port.width bits)))
+              storage.addTags(mem.getTags())
+              storage := port.data.asInstanceOf[Bits]
+            }
             case port : MemWrite => {
               assert(port.aspectRatio == 1)
               val storage = port.clockDomain(Reg(Bits(mem.width bits)))
@@ -653,6 +667,7 @@ trait PhaseMemBlackboxing extends PhaseNetlist {
               wrapConsumers(port, buffer)
             }
             case port : MemReadWrite => {
+              println("MemReadWrite statement")
               assert(port.aspectRatio == 1)
               val storage = port.clockDomain(Reg(Bits(mem.width bits)))
               storage.addTags(mem.getTags())
@@ -752,7 +767,33 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
       super.removeMem(mem)
     }
 
-    if (mem.initialContent != null) {
+    if (topo.portCount == 1 && topo.readsSync.size == 1) {
+      println("black boxing Rom_1rs "+mem.getComponent().definitionName)
+      val binFile = mem.getComponent().definitionName+".v_"+mem.getComponent().getName()+"_"+mem.getName()+".bin"
+      println(binFile)
+      mem.component.rework {
+        val port = topo.readsSync.head
+
+        val rom = new Rom_1rs(
+          wordWidth = mem.getWidth,
+          wordCount = mem.wordCount,
+          binFile   = binFile,
+          technology = mem.technology,
+          miscInWidth = if(mem.miscInWidth > 0) mem.miscInWidth else 1
+        )
+
+        rom.io.addr.assignFrom(port.address)
+        rom.io.en.assignFrom(wrapBool(port.readEnable) && port.clockDomain.isClockEnableActive)
+        if (mem.miscInWidth > 0)
+          rom.io.miscIn.assignFrom(topo.miscIn.head.data)
+        else
+          rom.io.miscIn := B"1"
+        wrapConsumers(port, rom.io.data)
+
+        rom.setName(mem.getName()+"bb")
+        //removeMem() // keep to generate bin file
+      }
+    } else if (mem.initialContent != null) {
       return "Can't blackbox ROM"  //TODO
       //      } else if (topo.writes.size == 1 && topo.readsAsync.size == 1 && topo.portCount == 2) {
     } else if (topo.writes.size == 1 && (topo.readsAsync.nonEmpty || topo.readsSync.nonEmpty) && topo.writeReadSameAddressSync.isEmpty && topo.readWriteSync.isEmpty) {
@@ -804,12 +845,18 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
             wrMaskWidth = if (wr.mask != null) wr.mask.getWidth else 1,
             wrMaskEnable = wr.mask != null,
             readUnderWrite = rd.readUnderWrite,
-            technology = mem.technology
+            technology = mem.technology,
+            miscInWidth = if(mem.miscInWidth > 0) mem.miscInWidth else 1
           )
 
           ram.io.wr.en := wrapBool(wr.writeEnable) && wr.clockDomain.isClockEnableActive
           ram.io.wr.addr.assignFrom(wr.address)
           ram.io.wr.data.assignFrom(wr.data)
+
+          if (mem.miscInWidth > 0)
+            ram.io.miscIn.assignFrom(topo.miscIn.head.data)
+          else
+            ram.io.miscIn := B"1"
 
           if (wr.mask != null)
             ram.io.wr.mask.assignFrom(wr.mask)
@@ -831,19 +878,25 @@ class PhaseMemBlackBoxingDefault(policy: MemBlackboxingPolicy) extends PhaseMemB
         val port = topo.readWriteSync.head
 
         val ram = new Ram_1wrs(
-          wordWidth = port.width,
-          wordCount = mem.wordCount*mem.width/port.width,
-          technology = mem.technology,
-          readUnderWrite = port.readUnderWrite,
-          duringWrite = port.duringWrite,
-          maskWidth = if (port.mask != null) port.mask.getWidth else 1,
-          maskEnable = port.mask != null
-        )
+            wordWidth = port.width,
+            wordCount = mem.wordCount*mem.width/port.width,
+            technology = mem.technology,
+            readUnderWrite = port.readUnderWrite,
+            duringWrite = port.duringWrite,
+            maskWidth = if (port.mask != null) port.mask.getWidth else 1,
+            maskEnable = port.mask != null,
+            miscInWidth = if(mem.miscInWidth > 0) mem.miscInWidth else 1
+          )
+
 
         ram.io.addr.assignFrom(port.address)
         ram.io.en.assignFrom(wrapBool(port.chipSelect) && port.clockDomain.isClockEnableActive)
         ram.io.wr.assignFrom(port.writeEnable)
         ram.io.wrData.assignFrom(port.data)
+        if (mem.miscInWidth > 0)
+          ram.io.miscIn.assignFrom(topo.miscIn.head.data)
+        else
+          ram.io.miscIn := B"1"
 
         if (port.mask != null)
           ram.io.mask.assignFrom(port.mask)
@@ -1395,6 +1448,7 @@ class PhaseCheckCombinationalLoops() extends PhaseCheck{
           case node: Mem[_]       =>
           case node: MemReadSync  =>
           case node: MemReadWrite =>
+          case node: MemMiscIn    =>
           case node: MemWrite     =>
           case node: Expression   =>
             node.foreachDrivingExpression(e => walk(newPath, e))
@@ -1571,6 +1625,9 @@ class PhaseCheckCrossClock() extends PhaseCheck{
           }
           walked = GlobalData.get.allocateAlgoIncrementale()
           s.foreachDrivingExpression(as => walk(as, as :: s :: Nil, s.clockDomain))
+        case s: MemMiscIn if !s.hasTag(crossClockDomain) =>
+          walked = GlobalData.get.allocateAlgoIncrementale()
+          s.foreachDrivingExpression(as => walk(as, as :: s :: Nil, s.clockDomain))
         case s: MemWrite if !s.hasTag(crossClockDomain) =>
           if (s.hasTag(classOf[ClockDomainTag])) {
             PendingError(s"Can't add ClockDomainTag to memory ports:\n" + s.getScalaLocationLong)
@@ -1682,11 +1739,14 @@ class PhaseRemoveUselessStuff(postClockPulling: Boolean, tagVitals: Boolean) ext
             s.walkExpression{ case e: Statement => propagate(e) case _ => }
             s.walkParentTreeStatements(propagate)
           case s: Mem[_] => s.foreachStatements{
+            case p: MemMiscIn    => propagate(p)
             case p: MemWrite     => propagate(p)
             case p: MemReadWrite => propagate(p)
             case p: MemReadSync  =>
             case p: MemReadAsync =>
           }
+          case s: MemMiscIn =>
+            s.walkExpression{ case e: Statement => propagate(e) case _ => }
           case s: MemWrite =>
             s.isVital |= vital
             s.walkExpression{ case e: Statement => propagate(e) case _ => }
@@ -1721,6 +1781,7 @@ class PhaseRemoveUselessStuff(postClockPulling: Boolean, tagVitals: Boolean) ext
       case s: AssertStatement      => if(s.kind == AssertStatementKind.ASSERT || pc.config.isSystemVerilog) propagate(s, false)
       case s: TreeStatement        =>
       case s: AssignmentStatement  =>
+      case s: MemMiscIn            =>
       case s: MemWrite             =>
       case s: MemReadWrite         =>
       case s: MemReadSync          =>
